@@ -87,6 +87,7 @@ fn pb_torrent_info_to_wire(pb_ti: piratebay::types::TorrentInfo) -> TorrentInfo 
 async fn search(state: State<'_, App>, query: &str) -> Result<Vec<Torrent>, Error> {
     log::info!("searching: {query}");
     let torrents = state.client.search(query).await?;
+    log::info!("got {} results", torrents.len());
     let torrents = torrents
         .into_iter()
         .map(pb_torrent_to_wire)

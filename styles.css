@@ -46,6 +46,13 @@ table {
   width: 100%;
 }
 
+fieldset th,
+fieldset td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .search-results tr:nth-child(even) :nth-child(odd) {
   background:#fefefe;
 }

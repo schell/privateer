@@ -116,7 +116,7 @@ impl<V: View> TorrentDetail<V> {
                             td() { {super::format_unix_timestamp_with_locale(info.added)}}
                             td() { {info.seeders.to_string()} }
                             td() { {info.leechers.to_string()} }
-                            td() { {info.num_files.to_string()} }
+                            td() { {info.num_files.map(|i| i.to_string()).unwrap_or("unknown".to_string())} }
                             td() { {info.size.human_count_bytes().to_string()} }
                             td() { {info.download_count.clone().unwrap_or("?".into())} }
                             td() { {&info.status} }
