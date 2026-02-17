@@ -1,8 +1,15 @@
+use std::borrow::Cow;
 use std::ops::Deref;
 
 use detail::{TorrentDetail, TorrentDetailPhase};
 use futures_lite::FutureExt;
 use human_repr::HumanCount;
+use iti::components::alert::Alert;
+use iti::components::button::Button;
+use iti::components::icon::{Icon, IconGlyph, IconSize};
+use iti::components::pane::Panes;
+use iti::components::Flavor;
+use mogwai::view::AppendArg;
 use mogwai::{future::MogwaiFutureExt, web::prelude::*};
 use pb_wire_types::*;
 use wasm_bindgen::prelude::*;
@@ -142,13 +149,13 @@ impl SortColumn {
             SortColumn::Uploader => "Uploader",
         };
         let is_selected = Some(self) == current_sorting.column.as_ref();
-        let dir = is_selected.then_some(
-            match current_sorting.direction {
-                Direction::Descending => "🔽",
-                Direction::Ascending => "🔼",
-            }
-            .into_text::<V>(),
-        );
+        let dir = is_selected.then(|| {
+            let glyph = match current_sorting.direction {
+                Direction::Descending => IconGlyph::ChevronDown,
+                Direction::Ascending => IconGlyph::ChevronUp,
+            };
+            Icon::<V>::new(glyph, IconSize::Sm)
+        });
         rsx! {
             let wrapper = span(style:cursor = "pointer") {
                 {name.into_text::<V>()}
@@ -192,10 +199,10 @@ impl<V: View> Default for SearchResults<V> {
         use SortColumn::*;
         let mut sort = Proxy::<Sort>::default();
         rsx! {
-            let wrapper = div(class = "row search-results", style:display = "none") {
-                fieldset() {
-                    legend() { "Results:" }
-                    let table = table() {
+            let wrapper = div(class = "search-results mt-3", style:display = "none") {
+                h5(class = "mb-2") { "Results" }
+                div(class = "table-responsive") {
+                    let table = table(class = "table table-striped table-hover") {
                         colgroup() {
                             col(style:width = "35%"){}
                             col(style:width = "20%"){}
@@ -204,13 +211,15 @@ impl<V: View> Default for SearchResults<V> {
                             col(style:width = "9%"){}
                             col(style:width = "9%"){}
                         }
-                        tr() {
-                            th(on:click = on_click_name) {{sort(s => Name.header_view::<V>(s))}}
-                            th(on:click = on_click_date) {{sort(s => Date.header_view::<V>(s))}}
-                            th(on:click = on_click_seeders) {{sort(s => Seeders.header_view::<V>(s) )}}
-                            th(on:click = on_click_leechers) {{sort(s => Leechers.header_view::<V>(s) )}}
-                            th(on:click = on_click_size) {{sort(s => Size.header_view::<V>(s) )}}
-                            th(on:click = on_click_uploader) {{sort(s => Uploader.header_view::<V>(s))}}
+                        thead() {
+                            tr() {
+                                th(on:click = on_click_name) {{sort(s => Name.header_view::<V>(s))}}
+                                th(on:click = on_click_date) {{sort(s => Date.header_view::<V>(s))}}
+                                th(on:click = on_click_seeders) {{sort(s => Seeders.header_view::<V>(s))}}
+                                th(on:click = on_click_leechers) {{sort(s => Leechers.header_view::<V>(s))}}
+                                th(on:click = on_click_size) {{sort(s => Size.header_view::<V>(s))}}
+                                th(on:click = on_click_uploader) {{sort(s => Uploader.header_view::<V>(s))}}
+                            }
                         }
                     }
                 }
@@ -338,24 +347,29 @@ pub struct SearchView<V: View> {
     wrapper: V::Element,
     input: V::Element,
     on_submit_query: V::EventListener,
-    status_text: V::Text,
+    search_button: Button<V>,
+    status_alert: Alert<V>,
     search_results: SearchResults<V>,
 }
 
 impl<V: View> Default for SearchView<V> {
     fn default() -> Self {
+        let status_alert = Alert::new("Enter a search query", Flavor::Info);
+        let mut search_button = Button::new("Search", Some(Flavor::Primary));
+        search_button.get_icon_mut().set_glyph(IconGlyph::MagnifyingGlass);
         rsx! {
-            let wrapper = slot() {
-                p() { "Enter a search query" }
-                form(class="row", on:submit = on_submit_query) {
-                    let input = input(
-                        id="greet-input",
-                        placeholder="Enter a name...",
-                    ){}
-                    button(type="submit"){ "Search" }
+            let wrapper = div(class = "container-fluid") {
+                div(class = "mb-3") {
+                    {&status_alert}
                 }
-                p() {
-                    let status_text = ""
+                form(on:submit = on_submit_query) {
+                    div(class = "input-group mb-3") {
+                        let input = input(
+                            class = "form-control",
+                            placeholder = "Search for torrents...",
+                        ){}
+                        {&search_button}
+                    }
                 }
                 let search_results = {SearchResults::default()}
             }
@@ -364,7 +378,8 @@ impl<V: View> Default for SearchView<V> {
             wrapper,
             input,
             on_submit_query,
-            status_text,
+            search_button,
+            status_alert,
             search_results,
         }
     }
@@ -395,32 +410,60 @@ impl<V: View> SearchView<V> {
                         .input
                         .dyn_el(|input: &web_sys::HtmlInputElement| input.value())
                         .unwrap_or_default();
-                    self.status_text
-                        .set_text(format!("Searching for '{search_query}'..."));
+                    self.status_alert.set_text(format!("Searching for '{search_query}'..."));
+                    self.status_alert.set_flavor(Flavor::Info);
+                    self.search_button.start_spinner();
+                    self.search_button.disable();
 
                     match search(&search_query).await {
                         Ok(torrents) => {
-                            self.status_text
+                            self.status_alert
                                 .set_text(format!("Found {} results.", torrents.len()));
+                            self.status_alert.set_flavor(Flavor::Success);
                             self.search_results.set_search_results(torrents);
                             self.search_results.wrapper.set_style("display", "block");
                         }
                         Err(Error { msg }) => {
-                            self.status_text.set_text(msg);
+                            self.status_alert.set_text(msg);
+                            self.status_alert.set_flavor(Flavor::Danger);
                         }
                     }
+                    self.search_button.stop_spinner();
+                    self.search_button.enable();
                 }
             }
         }
     }
 }
 
+/// Enum wrapper to allow both SearchView and TorrentDetail in a single Panes<V, T>.
+///
+/// `Panes<V, T>` requires all panes to be the same type. This enum + manual
+/// `ViewChild` impl (using `as_boxed_append_arg` to type-erase the iterator)
+/// lets us store both view types in one `Panes` container.
+pub enum AppPane<V: View> {
+    Search(SearchView<V>),
+    Detail(TorrentDetail<V>),
+}
+
+impl<V: View> ViewChild<V> for AppPane<V> {
+    fn as_append_arg(&self) -> AppendArg<V, impl Iterator<Item = Cow<'_, V::Node>>> {
+        match self {
+            AppPane::Search(s) => s.as_boxed_append_arg(),
+            AppPane::Detail(d) => d.as_boxed_append_arg(),
+        }
+    }
+}
+
+/// Pane indices for `Panes<V, AppPane<V>>`.
+const SEARCH_PANE: usize = 0;
+const DETAIL_PANE: usize = 1;
+
 #[derive(ViewChild)]
 pub struct App<V: View> {
     #[child]
     container: V::Element,
-    search_view: SearchView<V>,
-    torrent_detail_view: TorrentDetail<V>,
+    panes: Panes<V, AppPane<V>>,
     is_in_search: bool,
     is_startup: bool,
 }
@@ -428,17 +471,36 @@ pub struct App<V: View> {
 impl<V: View> Default for App<V> {
     fn default() -> Self {
         rsx! {
-            let container = main(class = "container") {
-                let search_view = {SearchView::<V>::default()}
-                let torrent_detail_view = {TorrentDetail::<V>::default()}
+            let pane_wrapper = div() {}
+        }
+
+        // Both views go in the panes vec so we can switch freely between
+        // SEARCH_PANE (0) and DETAIL_PANE (1). The Panes default is a
+        // placeholder that gets replaced immediately by select(SEARCH_PANE).
+        let placeholder = AppPane::Detail(TorrentDetail::<V>::default());
+        let mut panes = Panes::new(pane_wrapper, placeholder);
+        panes.add_pane(AppPane::Search(SearchView::<V>::default()));
+        panes.add_pane(AppPane::Detail(TorrentDetail::<V>::default()));
+        panes.select(SEARCH_PANE);
+
+        rsx! {
+            let container = div() {
+                nav(class = "navbar navbar-dark bg-dark mb-3") {
+                    div(class = "container-fluid") {
+                        span(class = "navbar-brand mb-0 h1") { "PirateBay" }
+                    }
+                }
+                div(class = "container") {
+                    {&panes}
+                }
             }
         }
+
         Self {
             container,
-            search_view,
+            panes,
             is_in_search: true,
             is_startup: true,
-            torrent_detail_view,
         }
     }
 }
@@ -465,25 +527,56 @@ impl<V: View> App<V> {
         serde_json::from_str(&s).unwrap_throw()
     }
 
-    fn show_detail(&self) {
-        self.container.remove_child(&self.search_view);
-        self.container.append_child(&self.torrent_detail_view);
+    fn search_view_mut(&mut self) -> &mut SearchView<V> {
+        match self
+            .panes
+            .get_pane_at_mut(SEARCH_PANE)
+            .expect("search pane")
+        {
+            AppPane::Search(s) => s,
+            _ => panic!("expected search pane at index {SEARCH_PANE}"),
+        }
     }
 
-    fn show_search(&self) {
-        self.container.remove_child(&self.torrent_detail_view);
-        self.container.append_child(&self.search_view);
+    fn detail_view(&self) -> &TorrentDetail<V> {
+        match self
+            .panes
+            .get_pane_at(DETAIL_PANE)
+            .expect("detail pane")
+        {
+            AppPane::Detail(d) => d,
+            _ => panic!("expected detail pane at index {DETAIL_PANE}"),
+        }
+    }
+
+    fn detail_view_mut(&mut self) -> &mut TorrentDetail<V> {
+        match self
+            .panes
+            .get_pane_at_mut(DETAIL_PANE)
+            .expect("detail pane")
+        {
+            AppPane::Detail(d) => d,
+            _ => panic!("expected detail pane at index {DETAIL_PANE}"),
+        }
+    }
+
+    fn show_detail(&mut self) {
+        self.panes.select(DETAIL_PANE);
+    }
+
+    fn show_search(&mut self) {
+        self.panes.select(SEARCH_PANE);
     }
 
     fn set_info(&mut self, state: Option<TorrentInfo>) {
         self.is_in_search = state.is_none();
         if let Some(info) = state {
-            self.torrent_detail_view
+            self.detail_view_mut()
                 .set_phase(TorrentDetailPhase::Details(info));
             self.show_detail();
         } else {
             self.show_search();
-            self.torrent_detail_view.set_phase(TorrentDetailPhase::Init);
+            self.detail_view_mut().set_phase(TorrentDetailPhase::Init);
         }
     }
 
@@ -496,10 +589,10 @@ impl<V: View> App<V> {
             log::info!("in search");
             Self::store_state(None);
             self.show_search();
-            let torrent = self.search_view.step().await;
+            let torrent = self.search_view_mut().step().await;
             log::info!("getting info");
             let id = torrent.id.clone();
-            self.torrent_detail_view
+            self.detail_view_mut()
                 .set_phase(TorrentDetailPhase::Getting(torrent));
             self.show_detail();
             match info(&id).await {
@@ -508,12 +601,12 @@ impl<V: View> App<V> {
                     Self::store_state(Some(info));
                 }
                 Err(e) => self
-                    .torrent_detail_view
+                    .detail_view_mut()
                     .set_phase(TorrentDetailPhase::Err(e)),
             }
         } else {
             log::info!("in detail");
-            self.torrent_detail_view.step().await;
+            self.detail_view().step().await;
             self.is_in_search = true;
             log::info!("leaving detail");
         }

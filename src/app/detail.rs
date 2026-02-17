@@ -3,6 +3,10 @@ use std::ops::Deref;
 
 use futures_lite::FutureExt;
 use human_repr::HumanCount;
+use iti::components::alert::Alert;
+use iti::components::button::Button;
+use iti::components::icon::IconGlyph;
+use iti::components::Flavor;
 use mogwai::{future::MogwaiFutureExt, web::prelude::*};
 use pb_wire_types::{Error, Torrent, TorrentInfo};
 use wasm_bindgen::prelude::*;
@@ -35,7 +39,8 @@ pub enum TorrentDetailPhase {
 pub struct TorrentDetail<V: View> {
     #[child]
     wrapper: V::Element,
-    on_click_back: V::EventListener,
+    back_button: Button<V>,
+    status_alert: Alert<V>,
     phase: Proxy<TorrentDetailPhase>,
     detail_form: Option<V::Element>,
     on_click_magnet_link: Option<V::EventListener>,
@@ -43,34 +48,25 @@ pub struct TorrentDetail<V: View> {
 
 impl<V: View> Default for TorrentDetail<V> {
     fn default() -> Self {
-        let mut phase = Proxy::<TorrentDetailPhase>::default();
+        let phase = Proxy::<TorrentDetailPhase>::default();
+        let mut back_button = Button::new("Back", Some(Flavor::Secondary));
+        back_button.get_icon_mut().set_glyph(IconGlyph::ArrowLeft);
+        let status_alert = Alert::new("", Flavor::Info);
+        status_alert.set_is_visible(false);
         rsx! {
             let wrapper = div() {
-                div(class = "row") {
-                    span(
-                        on:click = on_click_back,
-                        style:cursor = "pointer"
-                    ) {"🔙"}
+                div(class = "mb-3") {
+                    {&back_button}
                 }
-                p() {
-                    {phase(p => match p {
-                        TorrentDetailPhase::Init => {
-                            "No details".into_text::<V>()
-                        }
-                        TorrentDetailPhase::Getting(t) => {
-                            format!("Retrieving details on '{}'", t.name).into_text::<V>()
-                        }
-                        TorrentDetailPhase::Err(Error{msg}) => {
-                            format!("Error: {msg}").into_text::<V>()
-                        }
-                        TorrentDetailPhase::Details(_) => V::Text::new(""),
-                    })}
+                div(class = "mb-3") {
+                    {&status_alert}
                 }
             }
         }
         Self {
             wrapper,
-            on_click_back,
+            back_button,
+            status_alert,
             phase,
             detail_form: None,
             on_click_magnet_link: None,
@@ -80,63 +76,53 @@ impl<V: View> Default for TorrentDetail<V> {
 
 impl<V: View> TorrentDetail<V> {
     fn detail_form(info: &TorrentInfo) -> (V::Element, V::EventListener) {
-        const HEADERS: &[usize] = &[4, 2, 1, 1, 1, 1, 1, 1, 1, 1];
-        fn width_at(n: usize) -> String {
-            let total: usize = HEADERS.iter().sum();
-            let w = HEADERS.get(n).copied().unwrap_or_default();
-            format!("{}%", 100.0 * (w as f32 / total as f32))
-        }
-
         rsx! {
             let wrapper = div(style:text_align = "left") {
-                fieldset() {
-                    legend(){ "Details" }
-                    table() {
-                        colgroup() {
-                            {(0..HEADERS.len()).map(|i| {
-                                rsx!{
-                                    let col = col(style:width = width_at(i)){}
-                                }
-                                col
-                            }).collect::<Vec<_>>()}
+                h5(class = "mb-2") { "Details" }
+                div(class = "table-responsive mb-3") {
+                    table(class = "table table-bordered") {
+                        thead() {
+                            tr() {
+                                th() { "Name" }
+                                th() { "Added" }
+                                th() { "Seeders" }
+                                th() { "Leechers" }
+                                th() { "Files" }
+                                th() { "Size" }
+                                th() { "Downloads" }
+                                th() { "Status" }
+                                th() { "User" }
+                            }
                         }
-                        tr() {
-                            th() { "Name"}
-                            th() { "Added" }
-                            th() { "Seeders" }
-                            th() { "Leechers" }
-                            th() { "Files"}
-                            th() { "Size" }
-                            th() { "Downloads" }
-                            th() { "Status" }
-                            th() { "User" }
-                        }
-                        tr() {
-                            td() { {&info.name} }
-                            td() { {super::format_unix_timestamp_with_locale(info.added)}}
-                            td() { {info.seeders.to_string()} }
-                            td() { {info.leechers.to_string()} }
-                            td() { {info.num_files.map(|i| i.to_string()).unwrap_or("unknown".to_string())} }
-                            td() { {info.size.human_count_bytes().to_string()} }
-                            td() { {info.download_count.clone().unwrap_or("?".into())} }
-                            td() { {&info.status} }
-                            td() { {&info.username} }
+                        tbody() {
+                            tr() {
+                                td() { {&info.name} }
+                                td() { {super::format_unix_timestamp_with_locale(info.added)} }
+                                td() { {info.seeders.to_string()} }
+                                td() { {info.leechers.to_string()} }
+                                td() { {info.num_files.map(|i| i.to_string()).unwrap_or("unknown".to_string())} }
+                                td() { {info.size.human_count_bytes().to_string()} }
+                                td() { {info.download_count.clone().unwrap_or("?".into())} }
+                                td() { {&info.status} }
+                                td() { {&info.username} }
+                            }
                         }
                     }
                 }
-                fieldset(class = "description") {
-                    legend() { "Description" }
-                    div(on:click = on_click) {
+                div(class = "description") {
+                    div(class = "mb-3", on:click = on_click) {
                         {{info.magnet.as_ref().map(|_| {
                             rsx! {
                                 let a = a(
                                     href = "#",
+                                    class = "btn btn-outline-primary",
                                 ){ "Open the magnet link" }
                             }
                             a
                         })}}
                     }
-                    pre(style:text_align = "left") {
+                    h5(class = "mb-2") { "Description" }
+                    pre(class = "bg-light p-3 border rounded", style:text_align = "left") {
                         {info.descr.clone().unwrap_or_default()}
                     }
                 }
@@ -150,11 +136,28 @@ impl<V: View> TorrentDetail<V> {
         if let Some(detail) = self.detail_form.take() {
             self.wrapper.remove_child(&detail);
         }
-        if let TorrentDetailPhase::Details(info) = &phase {
-            let (detail, on_click_magnet) = Self::detail_form(info);
-            self.wrapper.append_child(&detail);
-            self.detail_form = Some(detail);
-            self.on_click_magnet_link = Some(on_click_magnet);
+        match &phase {
+            TorrentDetailPhase::Init => {
+                self.status_alert.set_is_visible(false);
+            }
+            TorrentDetailPhase::Getting(t) => {
+                self.status_alert
+                    .set_text(format!("Retrieving details on '{}'...", t.name));
+                self.status_alert.set_flavor(Flavor::Info);
+                self.status_alert.set_is_visible(true);
+            }
+            TorrentDetailPhase::Err(Error { msg }) => {
+                self.status_alert.set_text(format!("Error: {msg}"));
+                self.status_alert.set_flavor(Flavor::Danger);
+                self.status_alert.set_is_visible(true);
+            }
+            TorrentDetailPhase::Details(info) => {
+                self.status_alert.set_is_visible(false);
+                let (detail, on_click_magnet) = Self::detail_form(info);
+                self.wrapper.append_child(&detail);
+                self.detail_form = Some(detail);
+                self.on_click_magnet_link = Some(on_click_magnet);
+            }
         }
         self.phase.set(phase);
     }
@@ -164,8 +167,8 @@ impl<V: View> TorrentDetail<V> {
             if let Some(on_click_magnet) = self.on_click_magnet_link.as_ref() {
                 log::info!("step details with magnet");
                 let clicked_back = self
-                    .on_click_back
-                    .next()
+                    .back_button
+                    .step()
                     .map(|_| true)
                     .or(on_click_magnet.next().map(|_| false))
                     .await;
@@ -181,7 +184,8 @@ impl<V: View> TorrentDetail<V> {
                     }
                 }
             } else {
-                self.on_click_back.next().await;
+                self.back_button.step().await;
+                break;
             }
         }
     }
