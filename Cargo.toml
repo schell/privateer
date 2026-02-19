@@ -9,7 +9,7 @@ console_error_panic_hook = "0.1.7"
 console_log = "1.0.0"
 futures-lite = "2.6.0"
 human-repr = "1.1.0"
-iti = { path = "../../iti/crates/iti", default-features = false }
+iti = { path = "../../iti/crates/iti", default-features = false, features = ["embed-assets"] }
 log.workspace = true
 pb-wire-types = { path = "crates/pb-wire-types" }
 mogwai = { version = "0.7.2" }

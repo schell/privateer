@@ -10,6 +10,8 @@ fn main() {
     console_log::init_with_level(log::Level::Trace).unwrap_throw();
     log::info!("start");
 
+    iti::assets::embedded::inject_styles();
+
     let mut app = App::<Web>::default();
     mogwai::web::body().append_child(&app);
     wasm_bindgen_futures::spawn_local(async move {
