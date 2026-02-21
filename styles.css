@@ -38,3 +38,14 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Downloads table */
+.table .progress {
+  height: 0.75rem;
+  margin: 0;
+}
+
+/* Tab content spacing */
+.nav-tabs {
+  border-bottom: 2px solid #dee2e6;
+}

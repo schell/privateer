@@ -2,21 +2,26 @@ use std::borrow::Cow;
 use std::ops::Deref;
 
 use detail::{TorrentDetail, TorrentDetailPhase};
+use downloads::DownloadsView;
 use futures_lite::FutureExt;
 use human_repr::HumanCount;
 use iti::components::alert::Alert;
 use iti::components::button::Button;
 use iti::components::icon::{Icon, IconGlyph, IconSize};
 use iti::components::pane::Panes;
+use iti::components::tab::{TabList, TabListEvent};
 use iti::components::Flavor;
 use mogwai::view::AppendArg;
 use mogwai::{future::MogwaiFutureExt, web::prelude::*};
 use pb_wire_types::*;
+use settings::SettingsView;
 use wasm_bindgen::prelude::*;
 
 mod detail;
+mod downloads;
+mod settings;
 
-mod invoke {
+pub mod invoke {
     use super::*;
 
     #[wasm_bindgen]
@@ -25,14 +30,15 @@ mod invoke {
         async fn invoke(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
     }
 
-    fn deserialize_as<T: serde::de::DeserializeOwned>(value: JsValue) -> Result<T, Error> {
+    fn deserialize_as<T: serde::de::DeserializeOwned>(value: JsValue) -> Result<T, AppError> {
         match serde_wasm_bindgen::from_value::<T>(value) {
             Ok(t) => Ok(t),
             Err(e) => {
                 log::error!("e: {e:#?}");
-                Err(Error {
-                    msg: "Could not deserialize".into(),
-                })
+                Err(AppError::new(
+                    ErrorKind::Serialization,
+                    "Could not deserialize",
+                ))
             }
         }
     }
@@ -40,18 +46,22 @@ mod invoke {
     pub async fn cmd<T: serde::Serialize, X: serde::de::DeserializeOwned>(
         name: &str,
         args: &T,
-    ) -> Result<X, Error> {
-        let value = serde_wasm_bindgen::to_value(args)
-            .map_err(|e| format!("could not serialize {}: {e}", std::any::type_name::<T>()))?;
+    ) -> Result<X, AppError> {
+        let value = serde_wasm_bindgen::to_value(args).map_err(|e| {
+            AppError::new(
+                ErrorKind::Serialization,
+                format!("could not serialize {}: {e}", std::any::type_name::<T>()),
+            )
+        })?;
         let result = invoke(name, value).await;
         match result {
             Ok(value) => deserialize_as::<X>(value),
-            Err(e) => Err(deserialize_as::<Error>(e)?),
+            Err(e) => Err(deserialize_as::<AppError>(e)?),
         }
     }
 }
 
-pub async fn search(query: &str) -> Result<Vec<Torrent>, Error> {
+pub async fn search(query: &str) -> Result<Vec<Torrent>, AppError> {
     #[derive(serde::Serialize)]
     struct Query<'a> {
         query: &'a str,
@@ -60,13 +70,37 @@ pub async fn search(query: &str) -> Result<Vec<Torrent>, Error> {
     invoke::cmd("search", &Query { query }).await
 }
 
-pub async fn info(id: &str) -> Result<TorrentInfo, Error> {
+pub async fn info(id: &str) -> Result<TorrentInfo, AppError> {
     #[derive(serde::Serialize)]
     struct Info<'a> {
         id: &'a str,
     }
 
     invoke::cmd("info", &Info { id }).await
+}
+
+pub async fn add_download(
+    info_hash: &str,
+    name: &str,
+    destination: Destination,
+) -> Result<(), AppError> {
+    #[derive(serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct AddDownloadArgs<'a> {
+        info_hash: &'a str,
+        name: &'a str,
+        destination: Destination,
+    }
+
+    invoke::cmd(
+        "add_download",
+        &AddDownloadArgs {
+            info_hash,
+            name,
+            destination,
+        },
+    )
+    .await
 }
 
 #[derive(ViewChild)]
@@ -356,7 +390,9 @@ impl<V: View> Default for SearchView<V> {
     fn default() -> Self {
         let status_alert = Alert::new("Enter a search query", Flavor::Info);
         let mut search_button = Button::new("Search", Some(Flavor::Primary));
-        search_button.get_icon_mut().set_glyph(IconGlyph::MagnifyingGlass);
+        search_button
+            .get_icon_mut()
+            .set_glyph(IconGlyph::MagnifyingGlass);
         rsx! {
             let wrapper = div(class = "container-fluid") {
                 div(class = "mb-3") {
@@ -410,7 +446,8 @@ impl<V: View> SearchView<V> {
                         .input
                         .dyn_el(|input: &web_sys::HtmlInputElement| input.value())
                         .unwrap_or_default();
-                    self.status_alert.set_text(format!("Searching for '{search_query}'..."));
+                    self.status_alert
+                        .set_text(format!("Searching for '{search_query}'..."));
                     self.status_alert.set_flavor(Flavor::Info);
                     self.search_button.start_spinner();
                     self.search_button.disable();
@@ -423,8 +460,8 @@ impl<V: View> SearchView<V> {
                             self.search_results.set_search_results(torrents);
                             self.search_results.wrapper.set_style("display", "block");
                         }
-                        Err(Error { msg }) => {
-                            self.status_alert.set_text(msg);
+                        Err(e) => {
+                            self.status_alert.set_text(e.to_string());
                             self.status_alert.set_flavor(Flavor::Danger);
                         }
                     }
@@ -441,58 +478,49 @@ impl<V: View> SearchView<V> {
 /// `Panes<V, T>` requires all panes to be the same type. This enum + manual
 /// `ViewChild` impl (using `as_boxed_append_arg` to type-erase the iterator)
 /// lets us store both view types in one `Panes` container.
-pub enum AppPane<V: View> {
+pub enum SearchPane<V: View> {
     Search(SearchView<V>),
     Detail(TorrentDetail<V>),
 }
 
-impl<V: View> ViewChild<V> for AppPane<V> {
+impl<V: View> ViewChild<V> for SearchPane<V> {
     fn as_append_arg(&self) -> AppendArg<V, impl Iterator<Item = Cow<'_, V::Node>>> {
         match self {
-            AppPane::Search(s) => s.as_boxed_append_arg(),
-            AppPane::Detail(d) => d.as_boxed_append_arg(),
+            SearchPane::Search(s) => s.as_boxed_append_arg(),
+            SearchPane::Detail(d) => d.as_boxed_append_arg(),
         }
     }
 }
 
-/// Pane indices for `Panes<V, AppPane<V>>`.
+/// Pane indices for `Panes<V, SearchPane<V>>`.
 const SEARCH_PANE: usize = 0;
 const DETAIL_PANE: usize = 1;
 
+/// The Search tab content: contains the search form and detail view with pane switching.
 #[derive(ViewChild)]
-pub struct App<V: View> {
+pub struct SearchTabContent<V: View> {
     #[child]
     container: V::Element,
-    panes: Panes<V, AppPane<V>>,
+    panes: Panes<V, SearchPane<V>>,
     is_in_search: bool,
     is_startup: bool,
 }
 
-impl<V: View> Default for App<V> {
+impl<V: View> Default for SearchTabContent<V> {
     fn default() -> Self {
         rsx! {
             let pane_wrapper = div() {}
         }
 
-        // Both views go in the panes vec so we can switch freely between
-        // SEARCH_PANE (0) and DETAIL_PANE (1). The Panes default is a
-        // placeholder that gets replaced immediately by select(SEARCH_PANE).
-        let placeholder = AppPane::Detail(TorrentDetail::<V>::default());
+        let placeholder = SearchPane::Detail(TorrentDetail::<V>::default());
         let mut panes = Panes::new(pane_wrapper, placeholder);
-        panes.add_pane(AppPane::Search(SearchView::<V>::default()));
-        panes.add_pane(AppPane::Detail(TorrentDetail::<V>::default()));
+        panes.add_pane(SearchPane::Search(SearchView::<V>::default()));
+        panes.add_pane(SearchPane::Detail(TorrentDetail::<V>::default()));
         panes.select(SEARCH_PANE);
 
         rsx! {
             let container = div() {
-                nav(class = "navbar navbar-dark bg-dark mb-3") {
-                    div(class = "container-fluid") {
-                        span(class = "navbar-brand mb-0 h1") { "PirateBay" }
-                    }
-                }
-                div(class = "container") {
-                    {&panes}
-                }
+                {&panes}
             }
         }
 
@@ -505,7 +533,7 @@ impl<V: View> Default for App<V> {
     }
 }
 
-impl<V: View> App<V> {
+impl<V: View> SearchTabContent<V> {
     fn store_state(info: Option<TorrentInfo>) {
         if V::is_view::<Web>() {
             let storage = mogwai::web::window()
@@ -533,19 +561,8 @@ impl<V: View> App<V> {
             .get_pane_at_mut(SEARCH_PANE)
             .expect("search pane")
         {
-            AppPane::Search(s) => s,
+            SearchPane::Search(s) => s,
             _ => panic!("expected search pane at index {SEARCH_PANE}"),
-        }
-    }
-
-    fn detail_view(&self) -> &TorrentDetail<V> {
-        match self
-            .panes
-            .get_pane_at(DETAIL_PANE)
-            .expect("detail pane")
-        {
-            AppPane::Detail(d) => d,
-            _ => panic!("expected detail pane at index {DETAIL_PANE}"),
         }
     }
 
@@ -555,7 +572,7 @@ impl<V: View> App<V> {
             .get_pane_at_mut(DETAIL_PANE)
             .expect("detail pane")
         {
-            AppPane::Detail(d) => d,
+            SearchPane::Detail(d) => d,
             _ => panic!("expected detail pane at index {DETAIL_PANE}"),
         }
     }
@@ -600,15 +617,190 @@ impl<V: View> App<V> {
                     self.set_info(Some(info.clone()));
                     Self::store_state(Some(info));
                 }
-                Err(e) => self
-                    .detail_view_mut()
-                    .set_phase(TorrentDetailPhase::Err(e)),
+                Err(e) => self.detail_view_mut().set_phase(TorrentDetailPhase::Err(e)),
             }
         } else {
             log::info!("in detail");
-            self.detail_view().step().await;
+            self.detail_view_mut().step().await;
             self.is_in_search = true;
             log::info!("leaving detail");
+        }
+    }
+}
+
+/// Enum of all top-level tab content panes.
+pub enum TabContent<V: View> {
+    Search(SearchTabContent<V>),
+    Downloads(DownloadsView<V>),
+    Settings(SettingsView<V>),
+}
+
+impl<V: View> ViewChild<V> for TabContent<V> {
+    fn as_append_arg(&self) -> AppendArg<V, impl Iterator<Item = Cow<'_, V::Node>>> {
+        match self {
+            TabContent::Search(s) => s.as_boxed_append_arg(),
+            TabContent::Downloads(d) => d.as_boxed_append_arg(),
+            TabContent::Settings(s) => s.as_boxed_append_arg(),
+        }
+    }
+}
+
+const TAB_SEARCH: usize = 0;
+const TAB_DOWNLOADS: usize = 1;
+const TAB_SETTINGS: usize = 2;
+
+/// Top-level application.
+#[derive(ViewChild)]
+pub struct App<V: View> {
+    #[child]
+    container: V::Element,
+    tab_list: TabList<V, V::Element>,
+    panes: Panes<V, TabContent<V>>,
+    active_tab: usize,
+    settings_loaded: bool,
+}
+
+impl<V: View> Default for App<V> {
+    fn default() -> Self {
+        let mut tab_list = TabList::<V, V::Element>::default();
+
+        // Create tab labels
+        rsx! {
+            let search_label = span() { "Search" }
+        }
+        rsx! {
+            let downloads_label = span() { "Downloads" }
+        }
+        rsx! {
+            let settings_label = span() { "Settings" }
+        }
+
+        tab_list.push(search_label);
+        tab_list.push(downloads_label);
+        tab_list.push(settings_label);
+        tab_list.select(0);
+
+        rsx! {
+            let pane_wrapper = div(class = "mt-3") {}
+        }
+
+        let placeholder = TabContent::Search(SearchTabContent::<V>::default());
+        let mut panes = Panes::new(pane_wrapper, placeholder);
+        panes.add_pane(TabContent::Search(SearchTabContent::default()));
+        panes.add_pane(TabContent::Downloads(DownloadsView::default()));
+        panes.add_pane(TabContent::Settings(SettingsView::default()));
+        panes.select(TAB_SEARCH);
+
+        rsx! {
+            let container = div() {
+                nav(class = "navbar navbar-dark bg-dark mb-3") {
+                    div(class = "container-fluid") {
+                        span(class = "navbar-brand mb-0 h1") { "PirateBay" }
+                    }
+                }
+                div(class = "container") {
+                    {&tab_list}
+                    {&panes}
+                }
+            }
+        }
+
+        Self {
+            container,
+            tab_list,
+            panes,
+            active_tab: TAB_SEARCH,
+            settings_loaded: false,
+        }
+    }
+}
+
+/// Result of a step in the app.
+enum AppStepResult {
+    /// A tab was clicked.
+    TabClicked(usize),
+    /// The current tab's content finished a step (no tab change needed).
+    ContentStep,
+}
+
+impl<V: View> App<V> {
+    fn select_tab(&mut self, index: usize) {
+        self.active_tab = index;
+        self.tab_list.select(index);
+        self.panes.select(index);
+    }
+
+    pub async fn step(&mut self) {
+        // We need to race "tab click" against "current pane step" without
+        // taking conflicting &self / &mut self borrows.  The trick: split the
+        // borrows so tab_list and panes are borrowed independently.
+
+        let result = match self.active_tab {
+            TAB_SEARCH => {
+                let search = match self.panes.get_pane_at_mut(TAB_SEARCH).expect("search tab") {
+                    TabContent::Search(s) => s,
+                    _ => panic!("expected search tab"),
+                };
+                let tab_click = async {
+                    let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
+                    AppStepResult::TabClicked(index)
+                };
+                let content_step = async {
+                    search.step().await;
+                    AppStepResult::ContentStep
+                };
+                tab_click.or(content_step).await
+            }
+            TAB_DOWNLOADS => {
+                let downloads = match self
+                    .panes
+                    .get_pane_at_mut(TAB_DOWNLOADS)
+                    .expect("downloads tab")
+                {
+                    TabContent::Downloads(d) => d,
+                    _ => panic!("expected downloads tab"),
+                };
+                let tab_click = async {
+                    let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
+                    AppStepResult::TabClicked(index)
+                };
+                let content_step = async {
+                    downloads.step().await;
+                    AppStepResult::ContentStep
+                };
+                tab_click.or(content_step).await
+            }
+            TAB_SETTINGS => {
+                let settings = match self
+                    .panes
+                    .get_pane_at_mut(TAB_SETTINGS)
+                    .expect("settings tab")
+                {
+                    TabContent::Settings(s) => s,
+                    _ => panic!("expected settings tab"),
+                };
+                if !self.settings_loaded {
+                    settings.load().await;
+                    self.settings_loaded = true;
+                }
+                let tab_click = async {
+                    let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
+                    AppStepResult::TabClicked(index)
+                };
+                let content_step = async {
+                    settings.step().await;
+                    AppStepResult::ContentStep
+                };
+                tab_click.or(content_step).await
+            }
+            _ => {
+                let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
+                AppStepResult::TabClicked(index)
+            }
+        };
+
+        if let AppStepResult::TabClicked(index) = result {
+            self.select_tab(index);
         }
     }
 }
