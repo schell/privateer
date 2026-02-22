@@ -6,11 +6,11 @@ use iti::components::progress::Progress;
 use iti::components::Flavor;
 use mogwai::future::MogwaiFutureExt;
 use mogwai::web::prelude::*;
-use pb_wire_types::{Destination, ErrorKind, TransmissionStatus, TransmissionTorrent};
+use privateer_wire_types::{Destination, ErrorKind, TransmissionStatus, TransmissionTorrent};
 
 use super::invoke;
 
-pub async fn get_torrents() -> Result<Vec<TransmissionTorrent>, pb_wire_types::AppError> {
+pub async fn get_torrents() -> Result<Vec<TransmissionTorrent>, privateer_wire_types::AppError> {
     #[derive(serde::Serialize)]
     struct Empty {}
     invoke::cmd("get_torrents", &Empty {}).await

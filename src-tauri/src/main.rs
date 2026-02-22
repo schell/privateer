@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    piratebay_app_lib::run()
+    privateer_lib::run()
 }

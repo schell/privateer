@@ -8,7 +8,7 @@ use iti::components::button::Button;
 use iti::components::icon::IconGlyph;
 use iti::components::Flavor;
 use mogwai::{future::MogwaiFutureExt, web::prelude::*};
-use pb_wire_types::{AppError, Destination, Torrent, TorrentInfo};
+use privateer_wire_types::{AppError, Destination, Torrent, TorrentInfo};
 use wasm_bindgen::prelude::*;
 
 mod open {
@@ -209,7 +209,7 @@ impl<V: View> Default for TorrentDetail<V> {
 
 impl<V: View> TorrentDetail<V> {
     fn detail_form(info: &TorrentInfo) -> (V::Element, Option<AddButtonGroup<V>>) {
-        // Auto-detect destination from PirateBay category
+        // Auto-detect destination from Privateer category
         let default_dest = Destination::from_category(info.category).unwrap_or_default();
 
         let add_group = info

@@ -16,7 +16,7 @@ impl Destination {
         }
     }
 
-    /// Auto-detect destination from a PirateBay category code.
+    /// Auto-detect destination from a Privateer category code.
     ///
     /// Standard video sub-categories:
     /// - 201 Movies, 202 Movies DVDR, 207 HD Movies, 209 3D, 299 Other
@@ -31,7 +31,7 @@ impl Destination {
         }
     }
 
-    /// Auto-detect destination from a PirateBay category code (numeric).
+    /// Auto-detect destination from a Privateer category code (numeric).
     pub fn from_category(cat: u32) -> Option<Self> {
         match cat {
             201 | 202 | 207 | 209 | 299 => Some(Self::Movies),
@@ -243,7 +243,7 @@ pub struct TorrentInfo {
 /// Categorises errors so the frontend can branch on the kind.
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum ErrorKind {
-    /// PirateBay search/info API errors (network, parsing, etc.).
+    /// Privateer search/info API errors (network, parsing, etc.).
     PirateSearch,
     /// Could not connect to the Transmission RPC daemon.
     TransmissionConnection,

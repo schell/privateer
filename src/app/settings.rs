@@ -5,7 +5,7 @@ use iti::components::button::Button;
 use iti::components::icon::IconGlyph;
 use iti::components::Flavor;
 use mogwai::{future::MogwaiFutureExt, web::prelude::*};
-use pb_wire_types::{AppError, ErrorKind, TransmissionConfig};
+use privateer_wire_types::{AppError, ErrorKind, TransmissionConfig};
 
 use super::invoke;
 

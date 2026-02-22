@@ -1,20 +1,20 @@
 //! Domain-specific error types using `snafu`.
 //!
-//! Each domain (PirateBay search, Transmission RPC, config I/O) has its own
+//! Each domain (Privateer search, Transmission RPC, config I/O) has its own
 //! error enum. All variants carry context and the original source error.
-//! Every domain enum converts into [`pb_wire_types::AppError`] with the
-//! appropriate [`pb_wire_types::ErrorKind`] so the frontend can branch on it.
+//! Every domain enum converts into [`privateer_wire_types::AppError`] with the
+//! appropriate [`privateer_wire_types::ErrorKind`] so the frontend can branch on it.
 
 use std::path::PathBuf;
 
-use pb_wire_types::{AppError, ErrorKind};
+use privateer_wire_types::{AppError, ErrorKind};
 use snafu::Snafu;
 
 // ---------------------------------------------------------------------------
-// PirateBay search / info
+// Privateer search / info
 // ---------------------------------------------------------------------------
 
-/// Errors originating from the PirateBay search/info API.
+/// Errors originating from the Privateer search/info API.
 ///
 /// `surf::Error` is an opaque `anyhow`-style wrapper so we stringify it
 /// at the boundary rather than carrying the original source.
@@ -112,7 +112,7 @@ pub enum CopyError {
 
     #[snafu(display("No destination directory configured for {destination}"))]
     CopyNoDestDir {
-        destination: pb_wire_types::Destination,
+        destination: privateer_wire_types::Destination,
     },
 
     #[snafu(display("Failed to create directory '{}': {source}", path.display()))]

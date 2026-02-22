@@ -1,4 +1,4 @@
-use pb_wire_types::{
+use privateer_wire_types::{
     AppError, CopyState, Destination, DownloadEntry, Torrent, TorrentInfo, TransmissionConfig,
     TransmissionStatus, TransmissionTorrent,
 };
@@ -215,7 +215,7 @@ fn pb_torrent_info_to_wire(pb_ti: piratebay::types::TorrentInfo) -> TorrentInfo 
 }
 
 // ---------------------------------------------------------------------------
-// Tauri commands – PirateBay
+// Tauri commands – Privateer
 // ---------------------------------------------------------------------------
 
 #[tauri::command]

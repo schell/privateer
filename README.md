@@ -1,6 +1,6 @@
-# piratebay tauri app
+# Privateer
 
-An app for doing quick pirate bay searches.
+A Tauri desktop app for quick torrent searches.
 
 ## development
 ```

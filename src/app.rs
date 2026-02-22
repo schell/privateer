@@ -13,7 +13,7 @@ use iti::components::tab::{TabList, TabListEvent};
 use iti::components::Flavor;
 use mogwai::view::AppendArg;
 use mogwai::{future::MogwaiFutureExt, web::prelude::*};
-use pb_wire_types::*;
+use privateer_wire_types::*;
 use settings::SettingsView;
 use wasm_bindgen::prelude::*;
 
@@ -695,10 +695,13 @@ impl<V: View> Default for App<V> {
             let container = div() {
                 nav(class = "navbar navbar-dark bg-dark mb-3") {
                     div(class = "container-fluid") {
-                        span(class = "navbar-brand mb-0 h1") { "PirateBay" }
+                        span(class = "navbar-brand mb-0 h1 d-flex align-items-center gap-2") {
+                            img(src = "public/logo.png", alt = "Privateer", style:height = "28px"){}
+                            "Privateer"
+                        }
                     }
                 }
-                div(class = "container") {
+                div(class = "container-fluid") {
                     {&tab_list}
                     {&panes}
                 }
