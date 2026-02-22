@@ -1,5 +1,31 @@
 /* Privateer app-specific overrides (Bootstrap provides base styling) */
 
+/* Full-height layout: prevent document-level scrolling */
+html, body {
+  height: 100%;
+  overflow: hidden;
+  margin: 0;
+}
+
+/* macOS: make room for traffic light buttons with overlay title bar */
+nav.navbar .container-fluid {
+  padding-left: 80px;
+}
+
+/* Tabs inside navbar: let system-9 theme handle styling,
+   just remove the bottom border since there's no content edge to merge with */
+nav.navbar .nav-tabs {
+  border-bottom: none;
+  margin-bottom: 0;
+  position: relative;
+  top: 12px;
+}
+
+/* Panes content */
+.panes {
+  background-color: var(--s9-bg-light);
+}
+
 /* Search results table */
 .search-results .torrent-name {
   text-align: left;
@@ -43,9 +69,4 @@
 .table .progress {
   height: 0.75rem;
   margin: 0;
-}
-
-/* Tab content spacing */
-.nav-tabs {
-  border-bottom: 2px solid #dee2e6;
 }

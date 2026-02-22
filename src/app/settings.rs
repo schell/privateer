@@ -68,9 +68,6 @@ impl<V: View> Default for SettingsView<V> {
             let wrapper = div(class = "container-fluid") {
                 h5(class = "mb-3") { "Transmission Settings" }
                 div(class = "mb-3") {
-                    {&status_alert}
-                }
-                div(class = "mb-3") {
                     label(class = "form-label") { "Host" }
                     let host_input = input(
                         class = "form-control",
@@ -134,6 +131,9 @@ impl<V: View> Default for SettingsView<V> {
                     div(on:click = on_click_test) {
                         {&test_button}
                     }
+                }
+                div(class = "mb-3 mt-2") {
+                    {&status_alert}
                 }
             }
         }

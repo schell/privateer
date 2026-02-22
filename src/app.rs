@@ -681,7 +681,7 @@ impl<V: View> Default for App<V> {
         tab_list.select(0);
 
         rsx! {
-            let pane_wrapper = div(class = "mt-3") {}
+            let pane_wrapper = div() {}
         }
 
         let placeholder = TabContent::Search(SearchTabContent::<V>::default());
@@ -692,17 +692,41 @@ impl<V: View> Default for App<V> {
         panes.select(TAB_SEARCH);
 
         rsx! {
-            let container = div() {
-                nav(class = "navbar navbar-dark bg-dark mb-3") {
-                    div(class = "container-fluid") {
-                        span(class = "navbar-brand mb-0 h1 d-flex align-items-center gap-2") {
-                            img(src = "public/logo.png", alt = "Privateer", style:height = "28px"){}
+            let container = div(
+                style:display = "flex",
+                style:flex_direction = "column",
+                style:height = "100vh",
+            ) {
+                nav(
+                    class = "navbar navbar-dark bg-dark",
+                    data_tauri_drag_region = "",
+                ) {
+                    div(
+                        class = "container-fluid d-flex align-items-center gap-3",
+                        data_tauri_drag_region = "",
+                        style:justify_content = "flex-start",
+                    ) {
+                        span(
+                            class = "navbar-brand mb-0 h1 d-flex align-items-center gap-2",
+                            data_tauri_drag_region = "",
+                        ) {
+                            img(
+                                src = "public/logo.png",
+                                alt = "Privateer",
+                                style:height = "28px",
+                                data_tauri_drag_region = "",
+                            ){}
                             "Privateer"
                         }
+                        {&tab_list}
                     }
                 }
-                div(class = "container-fluid") {
-                    {&tab_list}
+                div(
+                    class = "container-fluid panes",
+                    style:flex = "1",
+                    style:overflow_y = "auto",
+                    style:padding_top = "1rem",
+                ) {
                     {&panes}
                 }
             }
