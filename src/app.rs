@@ -20,6 +20,7 @@ use wasm_bindgen::prelude::*;
 mod detail;
 mod downloads;
 mod settings;
+pub mod watching;
 
 pub mod invoke {
     use super::*;
@@ -101,6 +102,58 @@ pub async fn add_download(
         },
     )
     .await
+}
+
+pub async fn get_watchlist() -> Result<Vec<WatchlistEntry>, AppError> {
+    #[derive(serde::Serialize)]
+    struct Empty {}
+    invoke::cmd("get_watchlist", &Empty {}).await
+}
+
+pub async fn add_to_watchlist(
+    title: &str,
+    destination: Destination,
+) -> Result<WatchlistEntry, AppError> {
+    #[derive(serde::Serialize)]
+    struct Args<'a> {
+        title: &'a str,
+        destination: Destination,
+    }
+    invoke::cmd("add_to_watchlist", &Args { title, destination }).await
+}
+
+pub async fn remove_from_watchlist(id: u64) -> Result<(), AppError> {
+    #[derive(serde::Serialize)]
+    struct Args {
+        id: u64,
+    }
+    invoke::cmd("remove_from_watchlist", &Args { id }).await
+}
+
+pub async fn get_downloads_ledger() -> Result<Vec<DownloadEntry>, AppError> {
+    #[derive(serde::Serialize)]
+    struct Empty {}
+    invoke::cmd("get_downloads_ledger", &Empty {}).await
+}
+
+pub async fn check_movie_exists(title: &str) -> Result<bool, AppError> {
+    #[derive(serde::Serialize)]
+    struct Args<'a> {
+        title: &'a str,
+    }
+    invoke::cmd("check_movie_exists", &Args { title }).await
+}
+
+pub async fn check_episodes_exist(
+    title: &str,
+    episodes: &[(u32, u32)],
+) -> Result<Vec<bool>, AppError> {
+    #[derive(serde::Serialize)]
+    struct Args<'a> {
+        title: &'a str,
+        episodes: &'a [(u32, u32)],
+    }
+    invoke::cmd("check_episodes_exist", &Args { title, episodes }).await
 }
 
 #[derive(ViewChild)]
@@ -471,6 +524,35 @@ impl<V: View> SearchView<V> {
             }
         }
     }
+
+    /// Programmatically run a search query.  Sets the input value, executes the
+    /// search, and populates results — the same as if the user had typed the
+    /// query and pressed Enter.
+    pub async fn run_search(&mut self, query: &str) {
+        self.input
+            .dyn_el(|input: &web_sys::HtmlInputElement| input.set_value(query));
+        self.status_alert
+            .set_text(format!("Searching for '{query}'..."));
+        self.status_alert.set_flavor(Flavor::Info);
+        self.search_button.start_spinner();
+        self.search_button.disable();
+
+        match search(query).await {
+            Ok(torrents) => {
+                self.status_alert
+                    .set_text(format!("Found {} results.", torrents.len()));
+                self.status_alert.set_flavor(Flavor::Success);
+                self.search_results.set_search_results(torrents);
+                self.search_results.wrapper.set_style("display", "block");
+            }
+            Err(e) => {
+                self.status_alert.set_text(e.to_string());
+                self.status_alert.set_flavor(Flavor::Danger);
+            }
+        }
+        self.search_button.stop_spinner();
+        self.search_button.enable();
+    }
 }
 
 /// Enum wrapper to allow both SearchView and TorrentDetail in a single Panes<V, T>.
@@ -504,6 +586,9 @@ pub struct SearchTabContent<V: View> {
     panes: Panes<V, SearchPane<V>>,
     is_in_search: bool,
     is_startup: bool,
+    /// When set, the next `step()` call will auto-run this search query
+    /// instead of waiting for user input.
+    pending_search: Option<String>,
 }
 
 impl<V: View> Default for SearchTabContent<V> {
@@ -529,6 +614,7 @@ impl<V: View> Default for SearchTabContent<V> {
             panes,
             is_in_search: true,
             is_startup: true,
+            pending_search: None,
         }
     }
 }
@@ -585,6 +671,14 @@ impl<V: View> SearchTabContent<V> {
         self.panes.select(SEARCH_PANE);
     }
 
+    /// Queue a search query to be executed on the next `step()`.  The search
+    /// tab will switch to its search pane, populate the input, run the query,
+    /// and display results.
+    pub fn set_pending_search(&mut self, query: String) {
+        self.pending_search = Some(query);
+        self.is_in_search = true;
+    }
+
     fn set_info(&mut self, state: Option<TorrentInfo>) {
         self.is_in_search = state.is_none();
         if let Some(info) = state {
@@ -602,6 +696,14 @@ impl<V: View> SearchTabContent<V> {
             let state = Self::get_state();
             self.set_info(state);
             self.is_startup = false;
+        } else if let Some(query) = self.pending_search.take() {
+            // A cross-tab search was requested (e.g. from the Watching tab).
+            log::info!("running pending search: {query}");
+            Self::store_state(None);
+            self.show_search();
+            self.search_view_mut().run_search(&query).await;
+            // Don't wait for result click — just show results and return.
+            // The next step() will be a normal `is_in_search` step.
         } else if self.is_in_search {
             log::info!("in search");
             Self::store_state(None);
@@ -632,6 +734,7 @@ impl<V: View> SearchTabContent<V> {
 pub enum TabContent<V: View> {
     Search(SearchTabContent<V>),
     Downloads(DownloadsView<V>),
+    Watching(watching::WatchingView<V>),
     Settings(SettingsView<V>),
 }
 
@@ -640,6 +743,7 @@ impl<V: View> ViewChild<V> for TabContent<V> {
         match self {
             TabContent::Search(s) => s.as_boxed_append_arg(),
             TabContent::Downloads(d) => d.as_boxed_append_arg(),
+            TabContent::Watching(w) => w.as_boxed_append_arg(),
             TabContent::Settings(s) => s.as_boxed_append_arg(),
         }
     }
@@ -647,7 +751,8 @@ impl<V: View> ViewChild<V> for TabContent<V> {
 
 const TAB_SEARCH: usize = 0;
 const TAB_DOWNLOADS: usize = 1;
-const TAB_SETTINGS: usize = 2;
+const TAB_WATCHING: usize = 2;
+const TAB_SETTINGS: usize = 3;
 
 /// Top-level application.
 #[derive(ViewChild)]
@@ -672,11 +777,15 @@ impl<V: View> Default for App<V> {
             let downloads_label = span() { "Downloads" }
         }
         rsx! {
+            let watching_label = span() { "Watching" }
+        }
+        rsx! {
             let settings_label = span() { "Settings" }
         }
 
         tab_list.push(search_label);
         tab_list.push(downloads_label);
+        tab_list.push(watching_label);
         tab_list.push(settings_label);
         tab_list.select(0);
 
@@ -688,6 +797,7 @@ impl<V: View> Default for App<V> {
         let mut panes = Panes::new(pane_wrapper, placeholder);
         panes.add_pane(TabContent::Search(SearchTabContent::default()));
         panes.add_pane(TabContent::Downloads(DownloadsView::default()));
+        panes.add_pane(TabContent::Watching(watching::WatchingView::default()));
         panes.add_pane(TabContent::Settings(SettingsView::default()));
         panes.select(TAB_SEARCH);
 
@@ -748,6 +858,8 @@ enum AppStepResult {
     TabClicked(usize),
     /// The current tab's content finished a step (no tab change needed).
     ContentStep,
+    /// The Watching tab wants to navigate to the Search tab with a query.
+    NavigateToSearch(String),
 }
 
 impl<V: View> App<V> {
@@ -797,6 +909,27 @@ impl<V: View> App<V> {
                 };
                 tab_click.or(content_step).await
             }
+            TAB_WATCHING => {
+                let watching = match self
+                    .panes
+                    .get_pane_at_mut(TAB_WATCHING)
+                    .expect("watching tab")
+                {
+                    TabContent::Watching(w) => w,
+                    _ => panic!("expected watching tab"),
+                };
+                let tab_click = async {
+                    let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
+                    AppStepResult::TabClicked(index)
+                };
+                let content_step = async {
+                    match watching.step().await {
+                        Some(query) => AppStepResult::NavigateToSearch(query),
+                        None => AppStepResult::ContentStep,
+                    }
+                };
+                tab_click.or(content_step).await
+            }
             TAB_SETTINGS => {
                 let settings = match self
                     .panes
@@ -826,8 +959,24 @@ impl<V: View> App<V> {
             }
         };
 
-        if let AppStepResult::TabClicked(index) = result {
-            self.select_tab(index);
+        match result {
+            AppStepResult::TabClicked(index) => {
+                self.select_tab(index);
+            }
+            AppStepResult::NavigateToSearch(query) => {
+                // Switch to the Search tab and queue the search query.
+                let search_tab = match self
+                    .panes
+                    .get_pane_at_mut(TAB_SEARCH)
+                    .expect("search tab")
+                {
+                    TabContent::Search(s) => s,
+                    _ => panic!("expected search tab"),
+                };
+                search_tab.set_pending_search(query);
+                self.select_tab(TAB_SEARCH);
+            }
+            AppStepResult::ContentStep => {}
         }
     }
 }

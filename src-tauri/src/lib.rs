@@ -1,6 +1,6 @@
 use privateer_wire_types::{
     AppError, CopyState, Destination, DownloadEntry, Torrent, TorrentInfo, TransmissionConfig,
-    TransmissionStatus, TransmissionTorrent,
+    TransmissionStatus, TransmissionTorrent, WatchlistEntry,
 };
 use piratebay::pirateclient::PirateClient;
 use std::path::PathBuf;
@@ -26,12 +26,17 @@ struct App {
     ledger_path: PathBuf,
     /// Signal the background copy task to wake up immediately.
     copy_notify: Arc<Notify>,
+    watchlist: Mutex<Vec<WatchlistEntry>>,
+    watchlist_path: PathBuf,
+    next_watchlist_id: Mutex<u64>,
 }
 
 impl App {
-    fn new(config_path: PathBuf, ledger_path: PathBuf) -> Self {
+    fn new(config_path: PathBuf, ledger_path: PathBuf, watchlist_path: PathBuf) -> Self {
         let config = Self::load_config(&config_path);
         let ledger = Self::load_ledger(&ledger_path);
+        let watchlist: Vec<WatchlistEntry> = Self::load_json(&watchlist_path);
+        let next_id = watchlist.iter().map(|e| e.id).max().unwrap_or(0) + 1;
         Self {
             client: PirateClient::new(),
             transmission_config: Mutex::new(config),
@@ -39,6 +44,9 @@ impl App {
             downloads_ledger: Mutex::new(ledger),
             ledger_path,
             copy_notify: Arc::new(Notify::new()),
+            watchlist: Mutex::new(watchlist),
+            watchlist_path,
+            next_watchlist_id: Mutex::new(next_id),
         }
     }
 
@@ -84,6 +92,32 @@ impl App {
             })?;
         }
         let json = serde_json::to_string_pretty(ledger).context(SerializeSnafu)?;
+        std::fs::write(path, json).context(WriteFileSnafu {
+            path: path.to_path_buf(),
+        })?;
+        Ok(())
+    }
+
+    /// Generic JSON loader for any deserializable `Vec<T>`.
+    fn load_json<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Vec<T> {
+        if path.exists() {
+            match std::fs::read_to_string(path) {
+                Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Generic JSON saver for any serializable slice.
+    fn save_json<T: serde::Serialize>(path: &PathBuf, data: &[T]) -> Result<(), ConfigError> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).context(CreateDirSnafu {
+                path: parent.to_path_buf(),
+            })?;
+        }
+        let json = serde_json::to_string_pretty(data).context(SerializeSnafu)?;
         std::fs::write(path, json).context(WriteFileSnafu {
             path: path.to_path_buf(),
         })?;
@@ -474,6 +508,155 @@ async fn get_downloads_ledger(state: State<'_, App>) -> Result<Vec<DownloadEntry
 }
 
 // ---------------------------------------------------------------------------
+// Tauri commands – Watchlist
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn get_watchlist(state: State<'_, App>) -> Result<Vec<WatchlistEntry>, AppError> {
+    let watchlist = state.watchlist.lock().await;
+    Ok(watchlist.clone())
+}
+
+#[tauri::command]
+async fn add_to_watchlist(
+    state: State<'_, App>,
+    title: String,
+    destination: Destination,
+) -> Result<WatchlistEntry, AppError> {
+    let mut watchlist = state.watchlist.lock().await;
+    let mut next_id = state.next_watchlist_id.lock().await;
+    let entry = WatchlistEntry {
+        id: *next_id,
+        title,
+        destination,
+        added: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64,
+    };
+    *next_id += 1;
+    watchlist.push(entry.clone());
+    App::save_json(&state.watchlist_path, &watchlist)?;
+    log::info!("Added '{}' to watchlist (id={})", entry.title, entry.id);
+    Ok(entry)
+}
+
+#[tauri::command]
+async fn remove_from_watchlist(state: State<'_, App>, id: u64) -> Result<(), AppError> {
+    let mut watchlist = state.watchlist.lock().await;
+    watchlist.retain(|e| e.id != id);
+    App::save_json(&state.watchlist_path, &watchlist)?;
+    log::info!("Removed watchlist entry id={id}");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tauri commands – Existence checks
+// ---------------------------------------------------------------------------
+
+/// Check whether a movie title exists in the downloads ledger or on disk in
+/// `movies_dir`.  Uses case-insensitive substring matching.
+#[tauri::command]
+async fn check_movie_exists(state: State<'_, App>, title: String) -> Result<bool, AppError> {
+    let title_lower = title.to_lowercase();
+
+    // Check downloads ledger
+    let ledger = state.downloads_ledger.lock().await;
+    if ledger
+        .iter()
+        .any(|d| d.name.to_lowercase().contains(&title_lower))
+    {
+        return Ok(true);
+    }
+    drop(ledger);
+
+    // Check filesystem
+    let config = state.transmission_config.lock().await;
+    if let Some(dir) = config.dir_for(Destination::Movies) {
+        if !dir.is_empty() {
+            let dir_path = PathBuf::from(dir);
+            if dir_path.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&dir_path) {
+                    for entry in entries.flatten() {
+                        if entry
+                            .file_name()
+                            .to_string_lossy()
+                            .to_lowercase()
+                            .contains(&title_lower)
+                        {
+                            return Ok(true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+/// Check whether specific episodes exist in the downloads ledger or on disk in
+/// `shows_dir`.  Each episode is identified by a `(season, episode)` pair and
+/// matched by looking for the `S##E##` pattern (case-insensitive) together with
+/// the title.
+#[tauri::command]
+async fn check_episodes_exist(
+    state: State<'_, App>,
+    title: String,
+    episodes: Vec<(u32, u32)>,
+) -> Result<Vec<bool>, AppError> {
+    let title_lower = title.to_lowercase();
+
+    // Build pattern strings for each episode
+    let patterns: Vec<String> = episodes
+        .iter()
+        .map(|(s, e)| format!("s{s:02}e{e:02}"))
+        .collect();
+
+    let mut results = vec![false; episodes.len()];
+
+    // Check downloads ledger
+    let ledger = state.downloads_ledger.lock().await;
+    for dl in ledger.iter() {
+        let name_lower = dl.name.to_lowercase();
+        if !name_lower.contains(&title_lower) {
+            continue;
+        }
+        for (i, pat) in patterns.iter().enumerate() {
+            if !results[i] && name_lower.contains(pat) {
+                results[i] = true;
+            }
+        }
+    }
+    drop(ledger);
+
+    // Check filesystem
+    let config = state.transmission_config.lock().await;
+    if let Some(dir) = config.dir_for(Destination::Shows) {
+        if !dir.is_empty() {
+            let dir_path = PathBuf::from(dir);
+            if dir_path.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&dir_path) {
+                    for entry in entries.flatten() {
+                        let fname = entry.file_name().to_string_lossy().to_lowercase();
+                        if !fname.contains(&title_lower) {
+                            continue;
+                        }
+                        for (i, pat) in patterns.iter().enumerate() {
+                            if !results[i] && fname.contains(pat) {
+                                results[i] = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(results)
+}
+
+// ---------------------------------------------------------------------------
 // Background copy task
 // ---------------------------------------------------------------------------
 
@@ -534,8 +717,9 @@ pub fn run() {
                 .unwrap_or_else(|_| PathBuf::from("."));
             let config_path = app_data_dir.join("transmission_config.json");
             let ledger_path = app_data_dir.join("downloads.json");
+            let watchlist_path = app_data_dir.join("watchlist.json");
 
-            let app_state = App::new(config_path, ledger_path);
+            let app_state = App::new(config_path, ledger_path, watchlist_path);
 
             // Spawn the background copy task.
             // The task reads config and ledger from disk each cycle so it
@@ -562,6 +746,11 @@ pub fn run() {
             get_torrents,
             add_download,
             get_downloads_ledger,
+            get_watchlist,
+            add_to_watchlist,
+            remove_from_watchlist,
+            check_movie_exists,
+            check_episodes_exist,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

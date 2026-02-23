@@ -136,6 +136,19 @@ pub struct TransmissionTorrent {
     pub copy_state: CopyState,
 }
 
+/// An entry in the persistent watchlist.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct WatchlistEntry {
+    /// Unique ID (monotonic counter).
+    pub id: u64,
+    /// The search title (e.g. "The Matrix 5", "Saturday Night Live").
+    pub title: String,
+    /// Movies or Shows.
+    pub destination: Destination,
+    /// Unix timestamp when this entry was added.
+    pub added: i64,
+}
+
 /// An entry in the persistent downloads ledger.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct DownloadEntry {
