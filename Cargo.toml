@@ -32,3 +32,4 @@ members = [
 [workspace.dependencies]
 log = "0.4.27"
 serde = { version = "1", features = ["derive"] }
+piratebay = { version = "0.2", git = "https://github.com/schell/piratebay" } #{path = "/Users/schell/code/piratebay" }

@@ -1,8 +1,8 @@
+use piratebay::pirateclient::PirateClient;
 use privateer_wire_types::{
     AppError, CopyState, Destination, DownloadEntry, Torrent, TorrentInfo, TransmissionConfig,
     TransmissionStatus, TransmissionTorrent, WatchlistEntry,
 };
-use piratebay::pirateclient::PirateClient;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -255,13 +255,12 @@ fn pb_torrent_info_to_wire(pb_ti: piratebay::types::TorrentInfo) -> TorrentInfo 
 #[tauri::command]
 async fn search(state: State<'_, App>, query: &str) -> Result<Vec<Torrent>, AppError> {
     log::info!("searching: {query}");
-    let torrents = state
-        .client
-        .search(query)
-        .await
-        .map_err(|e| PirateError::Search {
+    let torrents = state.client.search(query).await.map_err(|e| {
+        log::error!("{e}");
+        PirateError::Search {
             message: e.to_string(),
-        })?;
+        }
+    })?;
     log::info!("got {} results", torrents.len());
     let torrents = torrents
         .into_iter()
@@ -449,10 +448,7 @@ fn check_already_copied(config: &TransmissionConfig, dest: Destination, name: &s
 /// Checks `movies_dir` first, then `shows_dir`. Returns the destination
 /// and `CopyState::Copied` if the torrent's files are found on disk,
 /// or `None` if the torrent doesn't exist at either location.
-fn detect_destination(
-    config: &TransmissionConfig,
-    name: &str,
-) -> Option<(Destination, CopyState)> {
+fn detect_destination(config: &TransmissionConfig, name: &str) -> Option<(Destination, CopyState)> {
     for dest in [Destination::Movies, Destination::Shows] {
         if let Some(dir) = config.dir_for(dest) {
             if !dir.is_empty() {
@@ -664,11 +660,16 @@ async fn check_episodes_exist(
 ///
 /// This avoids blocking the tokio runtime when copying large files to slow
 /// destinations (e.g. a NAS with spinning disks).
-async fn copy_recursive_async(src: &std::path::Path, dst: &std::path::Path) -> Result<(), CopyError> {
+async fn copy_recursive_async(
+    src: &std::path::Path,
+    dst: &std::path::Path,
+) -> Result<(), CopyError> {
     if src.is_dir() {
-        tokio::fs::create_dir_all(dst).await.context(CopyCreateDirSnafu {
-            path: dst.to_path_buf(),
-        })?;
+        tokio::fs::create_dir_all(dst)
+            .await
+            .context(CopyCreateDirSnafu {
+                path: dst.to_path_buf(),
+            })?;
         let mut read_dir = tokio::fs::read_dir(src).await.context(CopyReadDirSnafu {
             path: src.to_path_buf(),
         })?;
@@ -682,9 +683,11 @@ async fn copy_recursive_async(src: &std::path::Path, dst: &std::path::Path) -> R
     } else {
         // Single file
         if let Some(parent) = dst.parent() {
-            tokio::fs::create_dir_all(parent).await.context(CopyCreateDirSnafu {
-                path: parent.to_path_buf(),
-            })?;
+            tokio::fs::create_dir_all(parent)
+                .await
+                .context(CopyCreateDirSnafu {
+                    path: parent.to_path_buf(),
+                })?;
         }
         tokio::fs::copy(src, dst).await.context(CopyFileSnafu {
             src: src.to_path_buf(),
