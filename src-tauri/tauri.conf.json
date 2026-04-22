@@ -16,9 +16,10 @@
         "title": "Privateer",
         "width": 1024,
         "height": 800,
+        "minWidth": 503,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": { "x": 12, "y": 24 }
+        "trafficLightPosition": { "x": 10, "y": 18 }
       }
     ],
     "security": {

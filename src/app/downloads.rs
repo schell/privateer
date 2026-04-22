@@ -67,7 +67,7 @@ struct TorrentRow<V: View> {
 impl<V: View> TorrentRow<V> {
     fn new(t: &TransmissionTorrent) -> Self {
         let pct = (t.percent_done * 100.0) as u8;
-        let progress = Progress::<V>::new(pct, status_flavor(&t.status));
+        let progress = Progress::<V>::new(pct);
         let mut status_badge = Proxy::new(t.status);
         let mut dest_badge_class = Proxy::new(t.destination);
         let show_buttons = t.destination.is_none();
@@ -172,7 +172,6 @@ impl<V: View> TorrentRow<V> {
         let pct = (t.percent_done * 100.0) as u8;
         self.name_text.set_text(&t.name);
         self.progress.set_value(pct);
-        self.progress.set_flavor(status_flavor(&t.status));
         self.pct_text
             .set_text(format!("{:.1}%", t.percent_done * 100.0));
         self.status_badge.set(t.status);
@@ -280,8 +279,7 @@ impl<V: View> DownloadsView<V> {
         match get_torrents().await {
             Ok(torrents) => {
                 if torrents.is_empty() {
-                    self.status_alert
-                        .set_text("No torrents in Transmission.");
+                    self.status_alert.set_text("No torrents in Transmission.");
                     self.status_alert.set_flavor(Flavor::Info);
                     self.status_alert.set_is_visible(true);
                     self.table_wrapper.set_style("display", "none");
@@ -373,19 +371,10 @@ impl<V: View> DownloadsView<V> {
             WaitResult::Timeout => {}
             WaitResult::Assign(event) => {
                 // Call add_download, then re-poll immediately
-                match super::add_download(
-                    &event.hash_string,
-                    &event.name,
-                    event.destination,
-                )
-                .await
+                match super::add_download(&event.hash_string, &event.name, event.destination).await
                 {
                     Ok(()) => {
-                        log::info!(
-                            "Assigned '{}' to {}",
-                            event.name,
-                            event.destination.label()
-                        );
+                        log::info!("Assigned '{}' to {}", event.name, event.destination.label());
                     }
                     Err(e) => {
                         log::error!("Failed to assign download: {e}");

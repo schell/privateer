@@ -32,8 +32,6 @@ fn main() {
 
     let mut app = App::<Web>::default();
     let body = mogwai::web::body();
-    body.set_attribute("class", "system-9")
-        .expect("can always set class");
     body.append_child(&app);
     wasm_bindgen_futures::spawn_local(async move {
         loop {

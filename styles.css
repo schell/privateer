@@ -5,68 +5,30 @@ html, body {
   height: 100%;
   overflow: hidden;
   margin: 0;
+  background-color: #CCCCFF;
+  min-width: 503px;
 }
 
-/* macOS: make room for traffic light buttons with overlay title bar */
-nav.navbar .container-fluid {
-  padding-left: 80px;
+:root {
+  --top: 42px;
+  --v-inset: 35px;
+  --h-inset: 60px;
 }
 
-/* Tabs inside navbar: let system-9 theme handle styling,
-   just remove the bottom border since there's no content edge to merge with */
-nav.navbar .nav-tabs {
-  border-bottom: none;
-  margin-bottom: 0;
-  position: relative;
-  top: 12px;
+#title {
+  padding: 0;
+  margin-left: var(--h-inset);
 }
 
-/* Panes content */
-.panes {
-  background-color: var(--s9-bg-light);
-}
-
-/* Search results table */
-.search-results .torrent-name {
-  text-align: left;
-}
-
-.search-results .torrent-username {
-  text-align: right;
-}
-
-.search-results th {
-  cursor: pointer;
-  user-select: none;
-}
-
-.search-result-item:hover {
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-/* Sort direction indicator */
-.direction {
+#tab-panel {
   position: absolute;
-  margin-left: 0.25em;
+  top: var(--top);
+  bottom: var(--v-inset);
+  left: var(--h-inset);
+  right: var(--h-inset);
 }
 
-/* Detail description overflow */
-.description pre {
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-
-/* Table cell text overflow */
-.search-results th,
-.search-results td {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Downloads table */
-.table .progress {
-  height: 0.75rem;
-  margin: 0;
+#tab-panel > .container-fluid {
+  height: 100%;
+  overflow: auto;
 }

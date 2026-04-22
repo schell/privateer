@@ -6,11 +6,12 @@ use downloads::DownloadsView;
 use futures_lite::FutureExt;
 use human_repr::HumanCount;
 use iti::components::alert::Alert;
-use iti::components::button::Button;
+use iti::components::button::{Button, PrimaryButton};
 use iti::components::icon::{Icon, IconGlyph, IconSize};
 use iti::components::pane::Panes;
-use iti::components::tab::{TabList, TabListEvent};
+use iti::components::tab::{TabList, TabListEvent, TabPanel};
 use iti::components::Flavor;
+use iti::id::Id;
 use mogwai::view::AppendArg;
 use mogwai::{future::MogwaiFutureExt, web::prelude::*};
 use privateer_wire_types::*;
@@ -434,7 +435,7 @@ pub struct SearchView<V: View> {
     wrapper: V::Element,
     input: V::Element,
     on_submit_query: V::EventListener,
-    search_button: Button<V>,
+    search_button: PrimaryButton<V>,
     status_alert: Alert<V>,
     search_results: SearchResults<V>,
 }
@@ -442,7 +443,7 @@ pub struct SearchView<V: View> {
 impl<V: View> Default for SearchView<V> {
     fn default() -> Self {
         let status_alert = Alert::new("Enter a search query", Flavor::Info);
-        let mut search_button = Button::new("Search", Some(Flavor::Primary));
+        let mut search_button = PrimaryButton::new("Search", None);
         search_button
             .get_icon_mut()
             .set_glyph(IconGlyph::MagnifyingGlass);
@@ -457,7 +458,10 @@ impl<V: View> Default for SearchView<V> {
                             class = "form-control",
                             placeholder = "Search for torrents...",
                         ){}
-                        {&search_button}
+                    }
+                    div(class = "row") {
+                        div(class = "col") {}
+                        div(class = "col-auto") {{&search_button}}
                     }
                 }
                 let search_results = {SearchResults::default()}
@@ -574,10 +578,6 @@ impl<V: View> ViewChild<V> for SearchPane<V> {
     }
 }
 
-/// Pane indices for `Panes<V, SearchPane<V>>`.
-const SEARCH_PANE: usize = 0;
-const DETAIL_PANE: usize = 1;
-
 /// The Search tab content: contains the search form and detail view with pane switching.
 #[derive(ViewChild)]
 pub struct SearchTabContent<V: View> {
@@ -589,6 +589,9 @@ pub struct SearchTabContent<V: View> {
     /// When set, the next `step()` call will auto-run this search query
     /// instead of waiting for user input.
     pending_search: Option<String>,
+
+    search_id: Id<SearchPane<V>>,
+    detail_id: Id<SearchPane<V>>,
 }
 
 impl<V: View> Default for SearchTabContent<V> {
@@ -599,9 +602,9 @@ impl<V: View> Default for SearchTabContent<V> {
 
         let placeholder = SearchPane::Detail(TorrentDetail::<V>::default());
         let mut panes = Panes::new(pane_wrapper, placeholder);
-        panes.add_pane(SearchPane::Search(SearchView::<V>::default()));
-        panes.add_pane(SearchPane::Detail(TorrentDetail::<V>::default()));
-        panes.select(SEARCH_PANE);
+        let search_id = panes.add_pane(SearchPane::Search(SearchView::<V>::default()));
+        let detail_id = panes.add_pane(SearchPane::Detail(TorrentDetail::<V>::default()));
+        panes.select(&search_id);
 
         rsx! {
             let container = div() {
@@ -615,6 +618,9 @@ impl<V: View> Default for SearchTabContent<V> {
             is_in_search: true,
             is_startup: true,
             pending_search: None,
+
+            search_id,
+            detail_id,
         }
     }
 }
@@ -644,31 +650,31 @@ impl<V: View> SearchTabContent<V> {
     fn search_view_mut(&mut self) -> &mut SearchView<V> {
         match self
             .panes
-            .get_pane_at_mut(SEARCH_PANE)
+            .get_pane_mut(&self.search_id)
             .expect("search pane")
         {
             SearchPane::Search(s) => s,
-            _ => panic!("expected search pane at index {SEARCH_PANE}"),
+            _ => panic!("expected search pane"),
         }
     }
 
     fn detail_view_mut(&mut self) -> &mut TorrentDetail<V> {
         match self
             .panes
-            .get_pane_at_mut(DETAIL_PANE)
+            .get_pane_mut(&self.detail_id)
             .expect("detail pane")
         {
             SearchPane::Detail(d) => d,
-            _ => panic!("expected detail pane at index {DETAIL_PANE}"),
+            _ => panic!("expected detail pane"),
         }
     }
 
     fn show_detail(&mut self) {
-        self.panes.select(DETAIL_PANE);
+        self.panes.select(&self.detail_id);
     }
 
     fn show_search(&mut self) {
-        self.panes.select(SEARCH_PANE);
+        self.panes.select(&self.search_id);
     }
 
     /// Queue a search query to be executed on the next `step()`.  The search
@@ -732,10 +738,22 @@ impl<V: View> SearchTabContent<V> {
 
 /// Enum of all top-level tab content panes.
 pub enum TabContent<V: View> {
+    Default(V::Element),
     Search(SearchTabContent<V>),
     Downloads(DownloadsView<V>),
     Watching(watching::WatchingView<V>),
     Settings(SettingsView<V>),
+}
+
+impl<V: View> Default for TabContent<V> {
+    fn default() -> Self {
+        TabContent::Default({
+            rsx! {
+                let view = p() {"Awaiting panes"}
+            }
+            view
+        })
+    }
 }
 
 impl<V: View> ViewChild<V> for TabContent<V> {
@@ -745,29 +763,55 @@ impl<V: View> ViewChild<V> for TabContent<V> {
             TabContent::Downloads(d) => d.as_boxed_append_arg(),
             TabContent::Watching(w) => w.as_boxed_append_arg(),
             TabContent::Settings(s) => s.as_boxed_append_arg(),
+            TabContent::Default(d) => d.as_boxed_append_arg(),
         }
     }
 }
 
-const TAB_SEARCH: usize = 0;
-const TAB_DOWNLOADS: usize = 1;
-const TAB_WATCHING: usize = 2;
-const TAB_SETTINGS: usize = 3;
+impl<V: View> TabContent<V> {
+    async fn step(&mut self) {
+        match self {
+            TabContent::Default(_) => {
+                futures_lite::future::pending::<()>().await;
+            }
+            TabContent::Search(search_tab_content) => {
+                search_tab_content.step().await;
+            }
+            TabContent::Downloads(downloads_view) => {
+                downloads_view.step().await;
+            }
+            TabContent::Watching(watching_view) => {
+                watching_view.step().await;
+            }
+            TabContent::Settings(settings_view) => {
+                settings_view.step().await;
+            }
+        }
+    }
+}
+
+type TabId<V: View> = Id<V::Element>;
 
 /// Top-level application.
 #[derive(ViewChild)]
 pub struct App<V: View> {
     #[child]
     container: V::Element,
-    tab_list: TabList<V, V::Element>,
-    panes: Panes<V, TabContent<V>>,
-    active_tab: usize,
+    tab_panel: TabPanel<V, V::Element, TabContent<V>>,
     settings_loaded: bool,
+
+    tab_search_id: TabId<V>,
+    tab_downloads_id: TabId<V>,
+    tab_watching_id: TabId<V>,
+    tab_settings_id: TabId<V>,
 }
 
 impl<V: View> Default for App<V> {
     fn default() -> Self {
-        let mut tab_list = TabList::<V, V::Element>::default();
+        let mut tab_panel = TabPanel::new(TabContent::default());
+        tab_panel.set_property("id", "tab-panel");
+        // The panels will align right with a spacer on the left
+        tab_panel.push_spacer();
 
         // Create tab labels
         rsx! {
@@ -783,71 +827,69 @@ impl<V: View> Default for App<V> {
             let settings_label = span() { "Settings" }
         }
 
-        tab_list.push(search_label);
-        tab_list.push(downloads_label);
-        tab_list.push(watching_label);
-        tab_list.push(settings_label);
-        tab_list.select(0);
-
-        rsx! {
-            let pane_wrapper = div() {}
-        }
-
-        let placeholder = TabContent::Search(SearchTabContent::<V>::default());
-        let mut panes = Panes::new(pane_wrapper, placeholder);
-        panes.add_pane(TabContent::Search(SearchTabContent::default()));
-        panes.add_pane(TabContent::Downloads(DownloadsView::default()));
-        panes.add_pane(TabContent::Watching(watching::WatchingView::default()));
-        panes.add_pane(TabContent::Settings(SettingsView::default()));
-        panes.select(TAB_SEARCH);
+        let tab_search_id = tab_panel.push(
+            search_label,
+            TabContent::Search(SearchTabContent::default()),
+        );
+        let tab_downloads_id = tab_panel.push(
+            downloads_label,
+            TabContent::Downloads(DownloadsView::default()),
+        );
+        let tab_watching_id = tab_panel.push(
+            watching_label,
+            TabContent::Watching(watching::WatchingView::default()),
+        );
+        let tab_settings_id = tab_panel.push(
+            settings_label,
+            TabContent::Settings(SettingsView::default()),
+        );
+        tab_panel.select(&tab_search_id);
 
         rsx! {
             let container = div(
-                style:display = "flex",
-                style:flex_direction = "column",
+                class = "container-fluid",
                 style:height = "100vh",
+                data_tauri_drag_region = ""
             ) {
-                nav(
-                    class = "navbar navbar-dark bg-dark",
+                // Drag bar
+                div(
+                    style:width = "100%",
+                    style:height = "35px",
+                    data_tauri_drag_region = ""
+                ) { }
+                div(
+                    class = "row",
                     data_tauri_drag_region = "",
                 ) {
-                    div(
-                        class = "container-fluid d-flex align-items-center gap-3",
+                    h1(
+                        id = "title",
+                        class = "editorial row",
+                        style:color = iti::color::PURPLE,
+                        style:font_weight = "lighter",
                         data_tauri_drag_region = "",
-                        style:justify_content = "flex-start",
                     ) {
-                        span(
-                            class = "navbar-brand mb-0 h1 d-flex align-items-center gap-2",
+                        img(
+                            src = "public/logo.png",
+                            alt = "Privateer",
+                            style:height = "28px",
+                            style:color = "rgb(123, 97, 255)",
                             data_tauri_drag_region = "",
-                        ) {
-                            img(
-                                src = "public/logo.png",
-                                alt = "Privateer",
-                                style:height = "28px",
-                                data_tauri_drag_region = "",
-                            ){}
-                            "Privateer"
-                        }
-                        {&tab_list}
+                        ){}
+                        "Privateer"
                     }
-                }
-                div(
-                    class = "container-fluid panes",
-                    style:flex = "1",
-                    style:overflow_y = "auto",
-                    style:padding_top = "1rem",
-                ) {
-                    {&panes}
+                    {&tab_panel}
                 }
             }
         }
 
         Self {
             container,
-            tab_list,
-            panes,
-            active_tab: TAB_SEARCH,
+            tab_panel,
             settings_loaded: false,
+            tab_search_id,
+            tab_downloads_id,
+            tab_watching_id,
+            tab_settings_id,
         }
     }
 }
@@ -863,10 +905,8 @@ enum AppStepResult {
 }
 
 impl<V: View> App<V> {
-    fn select_tab(&mut self, index: usize) {
-        self.active_tab = index;
-        self.tab_list.select(index);
-        self.panes.select(index);
+    fn select_tab(&mut self, id: &TabId<V>) {
+        self.tab_panel.select(id);
     }
 
     pub async fn step(&mut self) {
@@ -874,109 +914,110 @@ impl<V: View> App<V> {
         // taking conflicting &self / &mut self borrows.  The trick: split the
         // borrows so tab_list and panes are borrowed independently.
 
-        let result = match self.active_tab {
-            TAB_SEARCH => {
-                let search = match self.panes.get_pane_at_mut(TAB_SEARCH).expect("search tab") {
-                    TabContent::Search(s) => s,
-                    _ => panic!("expected search tab"),
-                };
-                let tab_click = async {
-                    let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
-                    AppStepResult::TabClicked(index)
-                };
-                let content_step = async {
-                    search.step().await;
-                    AppStepResult::ContentStep
-                };
-                tab_click.or(content_step).await
-            }
-            TAB_DOWNLOADS => {
-                let downloads = match self
-                    .panes
-                    .get_pane_at_mut(TAB_DOWNLOADS)
-                    .expect("downloads tab")
-                {
-                    TabContent::Downloads(d) => d,
-                    _ => panic!("expected downloads tab"),
-                };
-                let tab_click = async {
-                    let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
-                    AppStepResult::TabClicked(index)
-                };
-                let content_step = async {
-                    downloads.step().await;
-                    AppStepResult::ContentStep
-                };
-                tab_click.or(content_step).await
-            }
-            TAB_WATCHING => {
-                let watching = match self
-                    .panes
-                    .get_pane_at_mut(TAB_WATCHING)
-                    .expect("watching tab")
-                {
-                    TabContent::Watching(w) => w,
-                    _ => panic!("expected watching tab"),
-                };
-                let tab_click = async {
-                    let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
-                    AppStepResult::TabClicked(index)
-                };
-                let content_step = async {
-                    match watching.step().await {
-                        Some(query) => AppStepResult::NavigateToSearch(query),
-                        None => AppStepResult::ContentStep,
-                    }
-                };
-                tab_click.or(content_step).await
-            }
-            TAB_SETTINGS => {
-                let settings = match self
-                    .panes
-                    .get_pane_at_mut(TAB_SETTINGS)
-                    .expect("settings tab")
-                {
-                    TabContent::Settings(s) => s,
-                    _ => panic!("expected settings tab"),
-                };
-                if !self.settings_loaded {
-                    settings.load().await;
-                    self.settings_loaded = true;
-                }
-                let tab_click = async {
-                    let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
-                    AppStepResult::TabClicked(index)
-                };
-                let content_step = async {
-                    settings.step().await;
-                    AppStepResult::ContentStep
-                };
-                tab_click.or(content_step).await
-            }
-            _ => {
-                let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
-                AppStepResult::TabClicked(index)
-            }
-        };
+        let ev = self
+            .tab_panel
+            .step_with(|content| content.step().boxed_local())
+            .await;
 
-        match result {
-            AppStepResult::TabClicked(index) => {
-                self.select_tab(index);
-            }
-            AppStepResult::NavigateToSearch(query) => {
-                // Switch to the Search tab and queue the search query.
-                let search_tab = match self
-                    .panes
-                    .get_pane_at_mut(TAB_SEARCH)
-                    .expect("search tab")
-                {
-                    TabContent::Search(s) => s,
-                    _ => panic!("expected search tab"),
-                };
-                search_tab.set_pending_search(query);
-                self.select_tab(TAB_SEARCH);
-            }
-            AppStepResult::ContentStep => {}
-        }
+        // let result = match self.active_tab {
+        //     TAB_SEARCH => {
+        //         let search = match self.panes.get_pane_at_mut(TAB_SEARCH).expect("search tab") {
+        //             TabContent::Search(s) => s,
+        //             _ => panic!("expected search tab"),
+        //         };
+        //         let tab_click = async {
+        //             let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
+        //             AppStepResult::TabClicked(index)
+        //         };
+        //         let content_step = async {
+        //             search.step().await;
+        //             AppStepResult::ContentStep
+        //         };
+        //         tab_click.or(content_step).await
+        //     }
+        //     TAB_DOWNLOADS => {
+        //         let downloads = match self
+        //             .panes
+        //             .get_pane_at_mut(TAB_DOWNLOADS)
+        //             .expect("downloads tab")
+        //         {
+        //             TabContent::Downloads(d) => d,
+        //             _ => panic!("expected downloads tab"),
+        //         };
+        //         let tab_click = async {
+        //             let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
+        //             AppStepResult::TabClicked(index)
+        //         };
+        //         let content_step = async {
+        //             downloads.step().await;
+        //             AppStepResult::ContentStep
+        //         };
+        //         tab_click.or(content_step).await
+        //     }
+        //     TAB_WATCHING => {
+        //         let watching = match self
+        //             .panes
+        //             .get_pane_at_mut(TAB_WATCHING)
+        //             .expect("watching tab")
+        //         {
+        //             TabContent::Watching(w) => w,
+        //             _ => panic!("expected watching tab"),
+        //         };
+        //         let tab_click = async {
+        //             let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
+        //             AppStepResult::TabClicked(index)
+        //         };
+        //         let content_step = async {
+        //             match watching.step().await {
+        //                 Some(query) => AppStepResult::NavigateToSearch(query),
+        //                 None => AppStepResult::ContentStep,
+        //             }
+        //         };
+        //         tab_click.or(content_step).await
+        //     }
+        //     TAB_SETTINGS => {
+        //         let settings = match self
+        //             .panes
+        //             .get_pane_at_mut(TAB_SETTINGS)
+        //             .expect("settings tab")
+        //         {
+        //             TabContent::Settings(s) => s,
+        //             _ => panic!("expected settings tab"),
+        //         };
+        //         if !self.settings_loaded {
+        //             settings.load().await;
+        //             self.settings_loaded = true;
+        //         }
+        //         let tab_click = async {
+        //             let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
+        //             AppStepResult::TabClicked(index)
+        //         };
+        //         let content_step = async {
+        //             settings.step().await;
+        //             AppStepResult::ContentStep
+        //         };
+        //         tab_click.or(content_step).await
+        //     }
+        //     _ => {
+        //         let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
+        //         AppStepResult::TabClicked(index)
+        //     }
+        // };
+
+        // match result {
+        //     AppStepResult::TabClicked(index) => {
+        //         self.select_tab(index);
+        //     }
+        //     AppStepResult::NavigateToSearch(query) => {
+        //         // Switch to the Search tab and queue the search query.
+        //         let search_tab = match self.panes.get_pane_at_mut(TAB_SEARCH).expect("search tab") {
+        //             TabContent::Search(s) => s,
+        //             _ => panic!("expected search tab"),
+        //         };
+        //         search_tab.set_pending_search(query);
+        //         self.select_tab(TAB_SEARCH);
+        //     }
+        //     AppStepResult::ContentStep => {}
+        // }
     }
 }
