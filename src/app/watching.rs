@@ -12,9 +12,11 @@
 //! "Downloaded" badge when the movie exists.  Result text is clickable and
 //! navigates to the Search tab with the corresponding query.
 use futures_lite::FutureExt;
-use iti::components::badge::Badge;
-use iti::components::card::Card;
+use iti::components::button::{Button, PrimaryButton};
+use iti::components::icon::IconGlyph;
+use iti::components::title_bar::TitleBarEvent;
 use iti::components::Flavor;
+use iti::components::{badge::Badge, title_bar::TitleBar};
 use mogwai::web::prelude::*;
 use privateer_wire_types::{Destination, Torrent, WatchlistEntry};
 
@@ -96,7 +98,7 @@ fn parse_episodes(results: &[Torrent]) -> Vec<EpisodeGroup> {
             count,
         })
         .collect();
-    episodes.sort_by(|a, b| b.episode.cmp(&a.episode));
+    episodes.sort_by_key(|b| std::cmp::Reverse(b.episode));
     episodes
 }
 
@@ -118,21 +120,15 @@ struct EpisodeRow<V: View> {
 struct WatchCard<V: View> {
     #[child]
     column: V::Element,
-    card: Card<V>,
     entry_id: u64,
     destination: Destination,
-    title: String,
+    title: TitleBar<V>,
     body_text: V::Text,
-    /// Clickable wrapper around body_text for movies.
-    body_text_link: V::Element,
     on_body_text_click: V::EventListener,
     episode_list: V::Element,
-    on_remove: V::EventListener,
     /// Per-episode rows (rebuilt on each poll).  Each holds an event listener
     /// for navigating to Search.
     episode_rows: Vec<EpisodeRow<V>>,
-    /// Badge shown next to body text for movies when downloaded.
-    movie_badge: Badge<V>,
 }
 
 impl<V: View> WatchCard<V> {
@@ -142,79 +138,51 @@ impl<V: View> WatchCard<V> {
             Destination::Shows => Flavor::Warning,
         };
 
-        // Header: title + destination badge
-        let badge = Badge::new(entry.destination.label(), dest_flavor);
-        rsx! {
-            let header_content = div(class = "d-flex justify-content-between align-items-center") {
-                strong() { {entry.title.clone()} }
-                {&badge}
-            }
-        }
+        let badge = Badge::<V>::new(entry.destination.label(), dest_flavor);
 
-        // Body: clickable result text + existence badge (movies) + episode list (shows)
         rsx! {
-            let body_text = "Searching..."
-        }
-        let mut movie_badge = Badge::new("Downloaded", Flavor::Success);
-        movie_badge.set_pill(true);
-        rsx! {
-            let body_text_link = span(
-                class = "text-primary",
-                style:cursor = "pointer",
-                style:text_decoration = "underline",
-                on:click = on_body_text_click,
-            ) {
-                {&body_text}
-            }
-        }
-        rsx! {
-            let episode_list = ul(class = "list-group list-group-flush mt-2", style:display = "none") {}
-        }
-        rsx! {
-            let body_content = div() {
-                p(class = "card-text mb-1 d-flex align-items-center gap-2") {
-                    {&body_text_link}
-                    {&movie_badge}
-                }
-                {&episode_list}
-            }
-        }
-        // Hide movie badge initially (empty text renders nothing visible)
-        movie_badge.set_text("");
-
-        // Footer: remove button
-        rsx! {
-            let footer_content = div(class = "d-flex justify-content-end") {
-                button(class = "btn btn-sm btn-outline-danger", on:click = on_remove) {
-                    "\u{2715} Remove"
+            let column = div(class = "window col-auto mb-3") {
+                let title = {TitleBar::new(&entry.title)}
+                div(class = "watching") {
+                    div(class = "watching-body") {
+                        div(class = "container") {
+                            div(
+                                class = "row text-primary",
+                                style:cursor = "pointer",
+                                style:text_decoration = "underline",
+                                on:click = on_body_text_click,
+                            ) {
+                                let body_text = "Searching..."
+                            }
+                            div( class = "row") {
+                                {&badge}
+                            }
+                        }
+                        let episode_list = ul(class = "mt-2", style:display = "none") {}
+                    }
+                    div(class = "watching-footer") {
+                        let remove_button = {{
+                            let mut btn = Button::new("Remove", None);
+                            btn.get_icon_mut().set_glyph(IconGlyph::Xmark);
+                            btn.set_has_icon(true);
+                            btn
+                        }}
+                    }
                 }
             }
         }
 
-        let mut card = Card::new();
-        card.set_header(&header_content);
-        card.set_body(&body_content);
-        card.set_footer(&footer_content);
-
-        rsx! {
-            let column = div(class = "col-sm-6 col-md-4 col-lg-3 mb-3") {
-                {&card}
-            }
-        }
-
+        let mut title = title;
+        title.set_show_close_button(true);
         Self {
             column,
-            card,
             entry_id: entry.id,
             destination: entry.destination,
-            title: entry.title.clone(),
+            title,
             body_text,
-            body_text_link,
             on_body_text_click,
             episode_list,
-            on_remove,
             episode_rows: Vec::new(),
-            movie_badge,
         }
     }
 
@@ -222,17 +190,16 @@ impl<V: View> WatchCard<V> {
         if count == 0 {
             self.body_text.set_text("No results found");
         } else {
-            self.body_text
-                .set_text(format!("{count} results found"));
+            self.body_text.set_text(format!("{count} results found"));
         }
         self.episode_list.set_style("display", "none");
 
         // Show/hide downloaded badge
-        if exists {
-            self.movie_badge.set_text("Downloaded");
-        } else {
-            self.movie_badge.set_text("");
-        }
+        // if exists {
+        //     self.movie_badge.set_text("Downloaded");
+        // } else {
+        //     self.movie_badge.set_text("");
+        // }
     }
 
     fn set_show_results(
@@ -251,8 +218,8 @@ impl<V: View> WatchCard<V> {
                 ));
             }
             self.episode_list.set_style("display", "none");
-            // Hide movie badge for shows
-            self.movie_badge.set_text("");
+            // // Hide movie badge for shows
+            // self.movie_badge.set_text("");
             // Clear old episode rows
             for row in self.episode_rows.drain(..) {
                 self.episode_list.remove_child(&row.li);
@@ -265,8 +232,8 @@ impl<V: View> WatchCard<V> {
             "Season {season} \u{2014} {} episodes found",
             groups.len()
         ));
-        // Hide movie badge for shows
-        self.movie_badge.set_text("");
+        // // Hide movie badge for shows
+        // self.movie_badge.set_text("");
 
         // Clear and rebuild episode list
         for row in self.episode_rows.drain(..) {
@@ -329,8 +296,7 @@ impl<V: View> WatchCard<V> {
     }
 
     fn set_error(&self, message: &str) {
-        self.body_text
-            .set_text(format!("\u{26A0} {message}"));
+        self.body_text.set_text(format!("\u{26A0} {message}"));
         self.episode_list.set_style("display", "none");
     }
 }
@@ -345,13 +311,11 @@ pub struct WatchingView<V: View> {
     #[child]
     container: V::Element,
     grid: V::Element,
-    // "Add" card
-    add_card_body_default: V::Element,
     add_form: V::Element,
     title_input: V::Element,
     dest_movies_btn: V::Element,
     dest_shows_btn: V::Element,
-    on_add_click: V::EventListener,
+    add_button: PrimaryButton<V>,
     on_add_submit: V::EventListener,
     on_cancel: V::EventListener,
     // State
@@ -363,18 +327,6 @@ pub struct WatchingView<V: View> {
 
 impl<V: View> Default for WatchingView<V> {
     fn default() -> Self {
-        // "+" card default body (shown when form is hidden)
-        rsx! {
-            let add_card_body_default = div(
-                class = "text-center",
-                style:cursor = "pointer",
-                on:click = on_add_click,
-            ) {
-                div(class = "display-4 text-muted") { "+" }
-                p(class = "text-muted mb-0") { "Add to your watchlist" }
-            }
-        }
-
         // Add form (hidden initially)
         rsx! {
             let title_input = input(
@@ -394,55 +346,55 @@ impl<V: View> Default for WatchingView<V> {
             }
         }
         rsx! {
-            let add_form = div(style:display = "none") {
-                {&title_input}
-                div(class = "btn-group btn-group-sm mb-2 w-100") {
-                    {&dest_movies_btn}
-                    {&dest_shows_btn}
-                }
-                div(class = "d-flex gap-2") {
-                    button(class = "btn btn-sm btn-primary", on:click = on_add_submit) { "Add" }
-                    button(class = "btn btn-sm btn-secondary", on:click = on_cancel) { "Cancel" }
+            let add_form = div(
+                class = "window",
+                style:display = "none",
+            ) {
+                div(class = "watching") {
+                    div(class = "watching-body") {
+                        {&title_input}
+                        div(class = "btn-group btn-group-sm mb-2 w-100") {
+                            {&dest_movies_btn}
+                            {&dest_shows_btn}
+                        }
+                        div(class = "d-flex gap-2") {
+                            button(class = "btn btn-sm btn-primary", on:click = on_add_submit) { "Add" }
+                            button(class = "btn btn-sm btn-secondary", on:click = on_cancel) { "Cancel" }
+                        }
+                    }
                 }
             }
         }
 
-        // The "+" card
-        let mut add_card = Card::new();
-        rsx! {
-            let add_card_body_wrapper = div() {
-                {&add_card_body_default}
-                {&add_form}
-            }
-        }
-        add_card.set_body(&add_card_body_wrapper);
-        add_card.hide_header();
-        add_card.hide_footer();
+        // The "+" button
+        let mut add_button = PrimaryButton::new("Add to your watchlist", None);
+        add_button.get_icon_mut().set_glyph(IconGlyph::Plus);
+        add_button.set_has_icon(true);
 
         // Grid container
         rsx! {
-            let grid = div(class = "row g-3") {
-                div(class = "col-sm-6 col-md-4 col-lg-3 mb-3") {
-                    {&add_card}
+            let add_button_row = div(class = "row") {
+                div(style:margin_left = "auto") {
+                    {&add_button}
                 }
             }
         }
 
         rsx! {
-            let container = div() {
-                {&grid}
+            let container = div(class = "container-fluid") {
+                {add_button_row}
+                let grid = div(class = "row") {}
             }
         }
 
         Self {
             container,
             grid,
-            add_card_body_default,
             add_form,
             title_input,
             dest_movies_btn,
             dest_shows_btn,
-            on_add_click,
+            add_button,
             on_add_submit,
             on_cancel,
             watch_cards: Vec::new(),
@@ -455,13 +407,12 @@ impl<V: View> Default for WatchingView<V> {
 
 impl<V: View> WatchingView<V> {
     fn show_add_form(&self) {
-        self.add_card_body_default.set_style("display", "none");
+        self.grid.append_child(&self.add_form);
         self.add_form.remove_style("display");
     }
 
     fn hide_add_form(&self) {
         self.add_form.set_style("display", "none");
-        self.add_card_body_default.remove_style("display");
         self.title_input
             .dyn_el(|input: &web_sys::HtmlInputElement| input.set_value(""));
     }
@@ -504,6 +455,9 @@ impl<V: View> WatchingView<V> {
             self.grid.append_child(&card);
             self.watch_cards.push(card);
         }
+
+        // Poll the watchlist
+        self.poll().await;
     }
 
     /// Poll search results for all watched entries, including existence checks.
@@ -579,189 +533,183 @@ impl<V: View> WatchingView<V> {
     /// Loads watchlist on first call, polls searches, then waits 60 s or until
     /// the user interacts (add/remove/toggle).
     ///
-    /// Returns `Some(query)` when the user clicks a search link, indicating
+    /// Returns `query` when the user clicks a search link, indicating
     /// the caller should switch to the Search tab and run that query.
-    pub async fn step(&mut self) -> Option<String> {
-        // First load
-        if !self.loaded {
-            self.reload().await;
-            self.loaded = true;
-        }
+    pub async fn step(&mut self) -> String {
+        loop {
+            // First load
+            if !self.loaded {
+                self.reload().await;
+                self.loaded = true;
+            }
 
-        // Poll searches
-        self.poll().await;
+            // // Poll searches
+            // self.poll().await;
 
-        // Auto-remove downloaded movies
-        self.auto_remove_movies().await;
+            // // Auto-remove downloaded movies
+            // self.auto_remove_movies().await;
 
-        // Wait for user interaction or timeout
-        enum Event {
-            Timeout,
-            AddClick,
-            AddSubmit,
-            Cancel,
-            DestMovies,
-            DestShows,
-            Remove(u64),
-            Search(String),
-        }
+            // Wait for user interaction or timeout
+            enum Event {
+                Timeout,
+                AddClick,
+                AddSubmit,
+                Cancel,
+                DestMovies,
+                DestShows,
+                Remove(u64),
+                Search(String),
+            }
 
-        let timeout = async {
-            mogwai::time::wait_millis(60_000).await;
-            Event::Timeout
-        };
-        let add_click = async {
-            self.on_add_click.next().await;
-            Event::AddClick
-        };
-        let add_submit = async {
-            self.on_add_submit.next().await;
-            Event::AddSubmit
-        };
-        let cancel = async {
-            self.on_cancel.next().await;
-            Event::Cancel
-        };
-        let dest_movies = async {
-            self.dest_movies_btn.listen("click").next().await;
-            Event::DestMovies
-        };
-        let dest_shows = async {
-            self.dest_shows_btn.listen("click").next().await;
-            Event::DestShows
-        };
+            let timeout = async {
+                mogwai::time::wait_millis(60_000).await;
+                Event::Timeout
+            };
+            let add_click = async {
+                let _ = self.add_button.step().await;
+                Event::AddClick
+            };
+            let add_submit = async {
+                self.on_add_submit.next().await;
+                Event::AddSubmit
+            };
+            let cancel = async {
+                self.on_cancel.next().await;
+                Event::Cancel
+            };
+            let dest_movies = async {
+                self.dest_movies_btn.listen("click").next().await;
+                Event::DestMovies
+            };
+            let dest_shows = async {
+                self.dest_shows_btn.listen("click").next().await;
+                Event::DestShows
+            };
 
-        // Race remove buttons from all cards
-        let remove = async {
-            if self.watch_cards.is_empty() {
-                std::future::pending::<Event>().await
-            } else {
-                let futures: Vec<_> = self
+            // Race remove buttons from all cards
+            let remove = async {
+                if self.watch_cards.is_empty() {
+                    std::future::pending::<Event>().await
+                } else {
+                    let futures: Vec<_> = self
+                        .watch_cards
+                        .iter()
+                        .map(|c| {
+                            async move {
+                                let TitleBarEvent::CloseClicked = c.title.step().await;
+                                Event::Remove(c.entry_id)
+                            }
+                            .boxed_local()
+                        })
+                        .collect();
+                    mogwai::future::race_all(futures).await
+                }
+            };
+
+            // Race movie body text clicks (search link for movies)
+            let movie_search = async {
+                let movie_cards: Vec<_> = self
                     .watch_cards
                     .iter()
-                    .map(|c| {
-                        let id = c.entry_id;
-                        async move {
-                            c.on_remove.next().await;
-                            Event::Remove(id)
-                        }
-                        .boxed_local()
-                    })
+                    .filter(|c| c.destination == Destination::Movies)
                     .collect();
-                mogwai::future::race_all(futures).await
-            }
-        };
+                if movie_cards.is_empty() {
+                    std::future::pending::<Event>().await
+                } else {
+                    let futures: Vec<_> = movie_cards
+                        .iter()
+                        .map(|c| {
+                            let query = c.title.get_title();
+                            async move {
+                                c.on_body_text_click.next().await;
+                                Event::Search(query)
+                            }
+                            .boxed_local()
+                        })
+                        .collect();
+                    mogwai::future::race_all(futures).await
+                }
+            };
 
-        // Race movie body text clicks (search link for movies)
-        let movie_search = async {
-            let movie_cards: Vec<_> = self
-                .watch_cards
-                .iter()
-                .filter(|c| c.destination == Destination::Movies)
-                .collect();
-            if movie_cards.is_empty() {
-                std::future::pending::<Event>().await
-            } else {
-                let futures: Vec<_> = movie_cards
+            // Race episode row clicks (search link for shows)
+            let episode_search = async {
+                let all_rows: Vec<_> = self
+                    .watch_cards
                     .iter()
-                    .map(|c| {
-                        let query = c.title.clone();
-                        async move {
-                            c.on_body_text_click.next().await;
-                            Event::Search(query)
-                        }
-                        .boxed_local()
-                    })
+                    .flat_map(|c| c.episode_rows.iter())
                     .collect();
-                mogwai::future::race_all(futures).await
-            }
-        };
+                if all_rows.is_empty() {
+                    std::future::pending::<Event>().await
+                } else {
+                    let futures: Vec<_> = all_rows
+                        .iter()
+                        .map(|row| {
+                            let query = row.search_query.clone();
+                            async move {
+                                row.on_click.next().await;
+                                Event::Search(query)
+                            }
+                            .boxed_local()
+                        })
+                        .collect();
+                    mogwai::future::race_all(futures).await
+                }
+            };
 
-        // Race episode row clicks (search link for shows)
-        let episode_search = async {
-            let all_rows: Vec<_> = self
-                .watch_cards
-                .iter()
-                .flat_map(|c| c.episode_rows.iter())
-                .collect();
-            if all_rows.is_empty() {
-                std::future::pending::<Event>().await
-            } else {
-                let futures: Vec<_> = all_rows
-                    .iter()
-                    .map(|row| {
-                        let query = row.search_query.clone();
-                        async move {
-                            row.on_click.next().await;
-                            Event::Search(query)
-                        }
-                        .boxed_local()
-                    })
-                    .collect();
-                mogwai::future::race_all(futures).await
-            }
-        };
+            let event = timeout
+                .or(add_click)
+                .or(add_submit)
+                .or(cancel)
+                .or(dest_movies)
+                .or(dest_shows)
+                .or(remove)
+                .or(movie_search)
+                .or(episode_search)
+                .await;
 
-        let event = timeout
-            .or(add_click)
-            .or(add_submit)
-            .or(cancel)
-            .or(dest_movies)
-            .or(dest_shows)
-            .or(remove)
-            .or(movie_search)
-            .or(episode_search)
-            .await;
-
-        match event {
-            Event::Timeout => None,
-            Event::AddClick => {
-                self.show_add_form();
-                None
-            }
-            Event::AddSubmit => {
-                let title = self
-                    .title_input
-                    .dyn_el(|input: &web_sys::HtmlInputElement| input.value())
-                    .unwrap_or_default();
-                let title = title.trim();
-                if !title.is_empty() {
-                    match super::add_to_watchlist(title, self.selected_destination).await {
-                        Ok(_entry) => {
-                            self.hide_add_form();
-                            self.reload().await;
-                        }
-                        Err(e) => {
-                            log::error!("Failed to add to watchlist: {e}");
+            match event {
+                Event::Timeout => {}
+                Event::AddClick => {
+                    log::info!("adding to watchlist");
+                    self.show_add_form();
+                }
+                Event::AddSubmit => {
+                    let title = self
+                        .title_input
+                        .dyn_el(|input: &web_sys::HtmlInputElement| input.value())
+                        .unwrap_or_default();
+                    let title = title.trim();
+                    if !title.is_empty() {
+                        match super::add_to_watchlist(title, self.selected_destination).await {
+                            Ok(_entry) => {
+                                self.hide_add_form();
+                                self.reload().await;
+                            }
+                            Err(e) => {
+                                log::error!("Failed to add to watchlist: {e}");
+                            }
                         }
                     }
                 }
-                None
-            }
-            Event::Cancel => {
-                self.hide_add_form();
-                None
-            }
-            Event::DestMovies => {
-                self.select_movies();
-                None
-            }
-            Event::DestShows => {
-                self.select_shows();
-                None
-            }
-            Event::Remove(id) => {
-                match super::remove_from_watchlist(id).await {
+                Event::Cancel => {
+                    self.hide_add_form();
+                }
+                Event::DestMovies => {
+                    self.select_movies();
+                }
+                Event::DestShows => {
+                    self.select_shows();
+                }
+                Event::Remove(id) => match super::remove_from_watchlist(id).await {
                     Ok(()) => {
                         self.reload().await;
                     }
                     Err(e) => {
                         log::error!("Failed to remove from watchlist: {e}");
                     }
-                }
-                None
+                },
+                Event::Search(query) => return query,
             }
-            Event::Search(query) => Some(query),
         }
     }
 }

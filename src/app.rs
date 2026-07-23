@@ -1,25 +1,19 @@
 use std::borrow::Cow;
-use std::ops::Deref;
 
-use detail::{TorrentDetail, TorrentDetailPhase};
 use downloads::DownloadsView;
 use futures_lite::FutureExt;
-use human_repr::HumanCount;
-use iti::components::alert::Alert;
-use iti::components::button::{Button, PrimaryButton};
-use iti::components::icon::{Icon, IconGlyph, IconSize};
-use iti::components::pane::Panes;
-use iti::components::tab::{TabList, TabListEvent, TabPanel};
-use iti::components::Flavor;
-use iti::id::Id;
+use iti::components::tab::{TabListEvent, TabPanel, TabPanelEvent};
 use mogwai::view::AppendArg;
-use mogwai::{future::MogwaiFutureExt, web::prelude::*};
+use mogwai::web::prelude::*;
 use privateer_wire_types::*;
 use settings::SettingsView;
 use wasm_bindgen::prelude::*;
 
+use crate::app::search::SearchTabContent;
+
 mod detail;
 mod downloads;
+mod search;
 mod settings;
 pub mod watching;
 
@@ -157,14 +151,6 @@ pub async fn check_episodes_exist(
     invoke::cmd("check_episodes_exist", &Args { title, episodes }).await
 }
 
-#[derive(ViewChild)]
-struct TorrentView<V: View> {
-    #[child]
-    wrapper: V::Element,
-    on_click: V::EventListener,
-    torrent: Torrent,
-}
-
 pub fn format_unix_timestamp_with_locale(seconds: i64) -> String {
     // Convert seconds to milliseconds
     let milliseconds = seconds as f64 * 1000.0;
@@ -182,564 +168,10 @@ pub fn format_unix_timestamp_with_locale(seconds: i64) -> String {
         .into()
 }
 
-impl<V: View> TorrentView<V> {
-    fn new(torrent: Torrent) -> Self {
-        let added = if V::is_view::<Web>() {
-            format_unix_timestamp_with_locale(torrent.added_i64())
-        } else {
-            torrent.added.clone()
-        };
-        rsx! {
-            let wrapper = tr(
-                class = "search-result-item",
-                on:click = on_click,
-                style:cursor = "pointer",
-            ) {
-                td(class = "torrent-name") { {&torrent.name} }
-                td() { {&added} }
-                td() { {&torrent.seeders} }
-                td() { {&torrent.leechers} }
-                td() { {format!("{}", torrent.size_bytes().human_count_bytes())} }
-                td(class = "torrent-username") { {&torrent.username} }
-            }
-        }
-        Self {
-            wrapper,
-            on_click,
-            torrent,
-        }
-    }
-
-    async fn step(&self) -> &Torrent {
-        self.on_click.next().await;
-        &self.torrent
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum SortColumn {
-    Name,
-    Date,
-    Seeders,
-    Leechers,
-    Size,
-    Uploader,
-}
-
-impl SortColumn {
-    fn header_view<V: View>(&self, current_sorting: &Sort) -> V::Element {
-        let name = match self {
-            SortColumn::Name => "Name",
-            SortColumn::Date => "Date Added",
-            SortColumn::Seeders => "Seeders",
-            SortColumn::Leechers => "Leechers",
-            SortColumn::Size => "Size",
-            SortColumn::Uploader => "Uploader",
-        };
-        let is_selected = Some(self) == current_sorting.column.as_ref();
-        let dir = is_selected.then(|| {
-            let glyph = match current_sorting.direction {
-                Direction::Descending => IconGlyph::ChevronDown,
-                Direction::Ascending => IconGlyph::ChevronUp,
-            };
-            Icon::<V>::new(glyph, IconSize::Sm)
-        });
-        rsx! {
-            let wrapper = span(style:cursor = "pointer") {
-                {name.into_text::<V>()}
-                span(class = "direction") {{dir}}
-            }
-        }
-        wrapper
-    }
-}
-
-#[derive(Clone, Copy, Default, PartialEq)]
-enum Direction {
-    #[default]
-    Descending,
-    Ascending,
-}
-
-#[derive(Clone, Default, PartialEq)]
-struct Sort {
-    column: Option<SortColumn>,
-    direction: Direction,
-}
-
-#[derive(ViewChild)]
-struct SearchResults<V: View> {
-    #[child]
-    wrapper: V::Element,
-    table: V::Element,
-    torrents: Vec<TorrentView<V>>,
-    sort: Proxy<Sort>,
-    on_click_name: V::EventListener,
-    on_click_date: V::EventListener,
-    on_click_seeders: V::EventListener,
-    on_click_leechers: V::EventListener,
-    on_click_size: V::EventListener,
-    on_click_uploader: V::EventListener,
-}
-
-impl<V: View> Default for SearchResults<V> {
-    fn default() -> Self {
-        use SortColumn::*;
-        let mut sort = Proxy::<Sort>::default();
-        rsx! {
-            let wrapper = div(class = "search-results mt-3", style:display = "none") {
-                h5(class = "mb-2") { "Results" }
-                div(class = "table-responsive") {
-                    let table = table(class = "table table-striped table-hover") {
-                        colgroup() {
-                            col(style:width = "35%"){}
-                            col(style:width = "20%"){}
-                            col(style:width = "9%"){}
-                            col(style:width = "9%"){}
-                            col(style:width = "9%"){}
-                            col(style:width = "9%"){}
-                        }
-                        thead() {
-                            tr() {
-                                th(on:click = on_click_name) {{sort(s => Name.header_view::<V>(s))}}
-                                th(on:click = on_click_date) {{sort(s => Date.header_view::<V>(s))}}
-                                th(on:click = on_click_seeders) {{sort(s => Seeders.header_view::<V>(s))}}
-                                th(on:click = on_click_leechers) {{sort(s => Leechers.header_view::<V>(s))}}
-                                th(on:click = on_click_size) {{sort(s => Size.header_view::<V>(s))}}
-                                th(on:click = on_click_uploader) {{sort(s => Uploader.header_view::<V>(s))}}
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Self {
-            wrapper,
-            table,
-            torrents: vec![],
-            on_click_name,
-            on_click_date,
-            on_click_seeders,
-            on_click_leechers,
-            on_click_size,
-            on_click_uploader,
-            sort,
-        }
-    }
-}
-
-enum SearchResultsStep {
-    Sort {
-        column: SortColumn,
-        direction: Direction,
-    },
-    TorrentSelected(Box<Torrent>),
-}
-
-impl<V: View> SearchResults<V> {
-    async fn sort_event(&self) -> SearchResultsStep {
-        use SortColumn::*;
-        let sort_events = vec![
-            self.on_click_name.next().map(|_| Name).boxed_local(),
-            self.on_click_date.next().map(|_| Date).boxed_local(),
-            self.on_click_seeders.next().map(|_| Seeders).boxed_local(),
-            self.on_click_leechers
-                .next()
-                .map(|_| Leechers)
-                .boxed_local(),
-            self.on_click_size.next().map(|_| Size).boxed_local(),
-            self.on_click_uploader
-                .next()
-                .map(|_| Uploader)
-                .boxed_local(),
-        ];
-        let current_sort = self.sort.as_ref().clone();
-        let column = mogwai::future::race_all(sort_events).await;
-        let direction = if Some(column) == current_sort.column {
-            if current_sort.direction == Direction::Descending {
-                Direction::Ascending
-            } else {
-                Direction::Descending
-            }
-        } else {
-            current_sort.direction
-        };
-        SearchResultsStep::Sort { column, direction }
-    }
-
-    async fn select_event(&self) -> SearchResultsStep {
-        let torrent = mogwai::future::race_all(self.torrents.iter().map(|view| view.step())).await;
-        SearchResultsStep::TorrentSelected(Box::new(torrent.clone()))
-    }
-
-    /// Resolves to the first selected torrent.
-    async fn step(&mut self) -> Torrent {
-        loop {
-            match self.sort_event().or(self.select_event()).await {
-                SearchResultsStep::Sort { column, direction } => {
-                    let current_sort = self.sort.deref();
-                    if Some(column) != current_sort.column || direction != current_sort.direction {
-                        self.torrents.sort_by(|a, b| {
-                            let a = &a.torrent;
-                            let b = &b.torrent;
-                            let ord = match column {
-                                SortColumn::Name => a.name.cmp(&b.name),
-                                SortColumn::Date => a.added_i64().cmp(&b.added_i64()),
-                                SortColumn::Seeders => a.seeders_i64().cmp(&b.seeders_i64()),
-                                SortColumn::Leechers => a.leechers_i64().cmp(&b.leechers_i64()),
-                                SortColumn::Size => a.size_bytes().cmp(&b.size_bytes()),
-                                SortColumn::Uploader => a.username.cmp(&b.username),
-                            };
-                            if direction == Direction::Descending {
-                                ord.reverse()
-                            } else {
-                                ord
-                            }
-                        });
-                    }
-                    self.sort.set(Sort {
-                        column: Some(column),
-                        direction,
-                    });
-
-                    // Reorder the search results
-                    for view in self.torrents.iter() {
-                        self.table.append_child(&view.wrapper);
-                    }
-                }
-                SearchResultsStep::TorrentSelected(t) => return *t,
-            }
-        }
-    }
-
-    fn set_search_results(&mut self, torrents: impl IntoIterator<Item = Torrent>) {
-        self.torrents
-            .iter()
-            .for_each(|view| self.table.remove_child(view));
-        let views = torrents
-            .into_iter()
-            .map(|t| {
-                let view = TorrentView::new(t);
-                self.table.append_child(&view);
-                view
-            })
-            .collect();
-        self.torrents = views;
-    }
-}
-
-#[derive(ViewChild)]
-pub struct SearchView<V: View> {
-    #[child]
-    wrapper: V::Element,
-    input: V::Element,
-    on_submit_query: V::EventListener,
-    search_button: PrimaryButton<V>,
-    status_alert: Alert<V>,
-    search_results: SearchResults<V>,
-}
-
-impl<V: View> Default for SearchView<V> {
-    fn default() -> Self {
-        let status_alert = Alert::new("Enter a search query", Flavor::Info);
-        let mut search_button = PrimaryButton::new("Search", None);
-        search_button
-            .get_icon_mut()
-            .set_glyph(IconGlyph::MagnifyingGlass);
-        rsx! {
-            let wrapper = div(class = "container-fluid") {
-                div(class = "mb-3") {
-                    {&status_alert}
-                }
-                form(on:submit = on_submit_query) {
-                    div(class = "input-group mb-3") {
-                        let input = input(
-                            class = "form-control",
-                            placeholder = "Search for torrents...",
-                        ){}
-                    }
-                    div(class = "row") {
-                        div(class = "col") {}
-                        div(class = "col-auto") {{&search_button}}
-                    }
-                }
-                let search_results = {SearchResults::default()}
-            }
-        }
-        Self {
-            wrapper,
-            input,
-            on_submit_query,
-            search_button,
-            status_alert,
-            search_results,
-        }
-    }
-}
-
-enum Step<V: View> {
-    Results(Box<Torrent>),
-    Submit(V::Event),
-}
-
-impl<V: View> SearchView<V> {
-    /// Resolves with a selected torrent.
-    pub async fn step(&mut self) -> Torrent {
-        log::info!("step");
-
-        loop {
-            let submission = self.on_submit_query.next().map(Step::Submit);
-            let sorting = self
-                .search_results
-                .step()
-                .map(|t| Step::Results(Box::new(t)));
-            let ev: Step<V> = submission.or(sorting).await;
-            match ev {
-                Step::Results(t) => return *t,
-                Step::Submit(ev) => {
-                    ev.dyn_ev(|ev: &web_sys::Event| ev.prevent_default());
-                    let search_query = self
-                        .input
-                        .dyn_el(|input: &web_sys::HtmlInputElement| input.value())
-                        .unwrap_or_default();
-                    self.status_alert
-                        .set_text(format!("Searching for '{search_query}'..."));
-                    self.status_alert.set_flavor(Flavor::Info);
-                    self.search_button.start_spinner();
-                    self.search_button.disable();
-
-                    match search(&search_query).await {
-                        Ok(torrents) => {
-                            self.status_alert
-                                .set_text(format!("Found {} results.", torrents.len()));
-                            self.status_alert.set_flavor(Flavor::Success);
-                            self.search_results.set_search_results(torrents);
-                            self.search_results.wrapper.set_style("display", "block");
-                        }
-                        Err(e) => {
-                            self.status_alert.set_text(e.to_string());
-                            self.status_alert.set_flavor(Flavor::Danger);
-                        }
-                    }
-                    self.search_button.stop_spinner();
-                    self.search_button.enable();
-                }
-            }
-        }
-    }
-
-    /// Programmatically run a search query.  Sets the input value, executes the
-    /// search, and populates results — the same as if the user had typed the
-    /// query and pressed Enter.
-    pub async fn run_search(&mut self, query: &str) {
-        self.input
-            .dyn_el(|input: &web_sys::HtmlInputElement| input.set_value(query));
-        self.status_alert
-            .set_text(format!("Searching for '{query}'..."));
-        self.status_alert.set_flavor(Flavor::Info);
-        self.search_button.start_spinner();
-        self.search_button.disable();
-
-        match search(query).await {
-            Ok(torrents) => {
-                self.status_alert
-                    .set_text(format!("Found {} results.", torrents.len()));
-                self.status_alert.set_flavor(Flavor::Success);
-                self.search_results.set_search_results(torrents);
-                self.search_results.wrapper.set_style("display", "block");
-            }
-            Err(e) => {
-                self.status_alert.set_text(e.to_string());
-                self.status_alert.set_flavor(Flavor::Danger);
-            }
-        }
-        self.search_button.stop_spinner();
-        self.search_button.enable();
-    }
-}
-
-/// Enum wrapper to allow both SearchView and TorrentDetail in a single Panes<V, T>.
-///
-/// `Panes<V, T>` requires all panes to be the same type. This enum + manual
-/// `ViewChild` impl (using `as_boxed_append_arg` to type-erase the iterator)
-/// lets us store both view types in one `Panes` container.
-pub enum SearchPane<V: View> {
-    Search(SearchView<V>),
-    Detail(TorrentDetail<V>),
-}
-
-impl<V: View> ViewChild<V> for SearchPane<V> {
-    fn as_append_arg(&self) -> AppendArg<V, impl Iterator<Item = Cow<'_, V::Node>>> {
-        match self {
-            SearchPane::Search(s) => s.as_boxed_append_arg(),
-            SearchPane::Detail(d) => d.as_boxed_append_arg(),
-        }
-    }
-}
-
-/// The Search tab content: contains the search form and detail view with pane switching.
-#[derive(ViewChild)]
-pub struct SearchTabContent<V: View> {
-    #[child]
-    container: V::Element,
-    panes: Panes<V, SearchPane<V>>,
-    is_in_search: bool,
-    is_startup: bool,
-    /// When set, the next `step()` call will auto-run this search query
-    /// instead of waiting for user input.
-    pending_search: Option<String>,
-
-    search_id: Id<SearchPane<V>>,
-    detail_id: Id<SearchPane<V>>,
-}
-
-impl<V: View> Default for SearchTabContent<V> {
-    fn default() -> Self {
-        rsx! {
-            let pane_wrapper = div() {}
-        }
-
-        let placeholder = SearchPane::Detail(TorrentDetail::<V>::default());
-        let mut panes = Panes::new(pane_wrapper, placeholder);
-        let search_id = panes.add_pane(SearchPane::Search(SearchView::<V>::default()));
-        let detail_id = panes.add_pane(SearchPane::Detail(TorrentDetail::<V>::default()));
-        panes.select(&search_id);
-
-        rsx! {
-            let container = div() {
-                {&panes}
-            }
-        }
-
-        Self {
-            container,
-            panes,
-            is_in_search: true,
-            is_startup: true,
-            pending_search: None,
-
-            search_id,
-            detail_id,
-        }
-    }
-}
-
-impl<V: View> SearchTabContent<V> {
-    fn store_state(info: Option<TorrentInfo>) {
-        if V::is_view::<Web>() {
-            let storage = mogwai::web::window()
-                .local_storage()
-                .unwrap_throw()
-                .unwrap_throw();
-            storage
-                .set_item("store-state", &serde_json::to_string(&info).unwrap_throw())
-                .unwrap_throw();
-        }
-    }
-
-    fn get_state() -> Option<TorrentInfo> {
-        let storage = mogwai::web::window()
-            .local_storage()
-            .unwrap_throw()
-            .unwrap_throw();
-        let s = storage.get_item("store-state").unwrap_throw()?;
-        serde_json::from_str(&s).unwrap_throw()
-    }
-
-    fn search_view_mut(&mut self) -> &mut SearchView<V> {
-        match self
-            .panes
-            .get_pane_mut(&self.search_id)
-            .expect("search pane")
-        {
-            SearchPane::Search(s) => s,
-            _ => panic!("expected search pane"),
-        }
-    }
-
-    fn detail_view_mut(&mut self) -> &mut TorrentDetail<V> {
-        match self
-            .panes
-            .get_pane_mut(&self.detail_id)
-            .expect("detail pane")
-        {
-            SearchPane::Detail(d) => d,
-            _ => panic!("expected detail pane"),
-        }
-    }
-
-    fn show_detail(&mut self) {
-        self.panes.select(&self.detail_id);
-    }
-
-    fn show_search(&mut self) {
-        self.panes.select(&self.search_id);
-    }
-
-    /// Queue a search query to be executed on the next `step()`.  The search
-    /// tab will switch to its search pane, populate the input, run the query,
-    /// and display results.
-    pub fn set_pending_search(&mut self, query: String) {
-        self.pending_search = Some(query);
-        self.is_in_search = true;
-    }
-
-    fn set_info(&mut self, state: Option<TorrentInfo>) {
-        self.is_in_search = state.is_none();
-        if let Some(info) = state {
-            self.detail_view_mut()
-                .set_phase(TorrentDetailPhase::Details(info));
-            self.show_detail();
-        } else {
-            self.show_search();
-            self.detail_view_mut().set_phase(TorrentDetailPhase::Init);
-        }
-    }
-
-    pub async fn step(&mut self) {
-        if self.is_startup {
-            let state = Self::get_state();
-            self.set_info(state);
-            self.is_startup = false;
-        } else if let Some(query) = self.pending_search.take() {
-            // A cross-tab search was requested (e.g. from the Watching tab).
-            log::info!("running pending search: {query}");
-            Self::store_state(None);
-            self.show_search();
-            self.search_view_mut().run_search(&query).await;
-            // Don't wait for result click — just show results and return.
-            // The next step() will be a normal `is_in_search` step.
-        } else if self.is_in_search {
-            log::info!("in search");
-            Self::store_state(None);
-            self.show_search();
-            let torrent = self.search_view_mut().step().await;
-            log::info!("getting info");
-            let id = torrent.id.clone();
-            self.detail_view_mut()
-                .set_phase(TorrentDetailPhase::Getting(torrent));
-            self.show_detail();
-            match info(&id).await {
-                Ok(info) => {
-                    self.set_info(Some(info.clone()));
-                    Self::store_state(Some(info));
-                }
-                Err(e) => self.detail_view_mut().set_phase(TorrentDetailPhase::Err(e)),
-            }
-        } else {
-            log::info!("in detail");
-            self.detail_view_mut().step().await;
-            self.is_in_search = true;
-            log::info!("leaving detail");
-        }
-    }
-}
-
 /// Enum of all top-level tab content panes.
 pub enum TabContent<V: View> {
     Default(V::Element),
-    Search(SearchTabContent<V>),
+    Search(Box<SearchTabContent<V>>),
     Downloads(DownloadsView<V>),
     Watching(watching::WatchingView<V>),
     Settings(SettingsView<V>),
@@ -781,7 +213,8 @@ impl<V: View> TabContent<V> {
                 downloads_view.step().await;
             }
             TabContent::Watching(watching_view) => {
-                watching_view.step().await;
+                let watching_result = watching_view.step().await;
+                log::info!("watching result: {watching_result:?}");
             }
             TabContent::Settings(settings_view) => {
                 settings_view.step().await;
@@ -790,20 +223,12 @@ impl<V: View> TabContent<V> {
     }
 }
 
-type TabId<V: View> = Id<V::Element>;
-
 /// Top-level application.
 #[derive(ViewChild)]
 pub struct App<V: View> {
     #[child]
     container: V::Element,
     tab_panel: TabPanel<V, V::Element, TabContent<V>>,
-    settings_loaded: bool,
-
-    tab_search_id: TabId<V>,
-    tab_downloads_id: TabId<V>,
-    tab_watching_id: TabId<V>,
-    tab_settings_id: TabId<V>,
 }
 
 impl<V: View> Default for App<V> {
@@ -827,23 +252,28 @@ impl<V: View> Default for App<V> {
             let settings_label = span() { "Settings" }
         }
 
-        let tab_search_id = tab_panel.push(
-            search_label,
-            TabContent::Search(SearchTabContent::default()),
-        );
-        let tab_downloads_id = tab_panel.push(
-            downloads_label,
-            TabContent::Downloads(DownloadsView::default()),
-        );
-        let tab_watching_id = tab_panel.push(
-            watching_label,
-            TabContent::Watching(watching::WatchingView::default()),
-        );
-        let tab_settings_id = tab_panel.push(
-            settings_label,
-            TabContent::Settings(SettingsView::default()),
-        );
-        tab_panel.select(&tab_search_id);
+        let tab_ids = [
+            tab_panel.push(search_label, TabContent::Search(Box::default())),
+            tab_panel.push(
+                downloads_label,
+                TabContent::Downloads(DownloadsView::default()),
+            ),
+            tab_panel.push(
+                watching_label,
+                TabContent::Watching(watching::WatchingView::default()),
+            ),
+            tab_panel.push(
+                settings_label,
+                TabContent::Settings(SettingsView::default()),
+            ),
+        ];
+
+        // Read the last selected index from a previous save state
+        let index = iti::storage::get_item::<usize>(STORAGE_ITEM_FOR_TAB_PANEL_INDEX)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        tab_panel.select(&tab_ids[index]);
 
         rsx! {
             let container = div(
@@ -885,139 +315,27 @@ impl<V: View> Default for App<V> {
         Self {
             container,
             tab_panel,
-            settings_loaded: false,
-            tab_search_id,
-            tab_downloads_id,
-            tab_watching_id,
-            tab_settings_id,
         }
     }
 }
 
-/// Result of a step in the app.
-enum AppStepResult {
-    /// A tab was clicked.
-    TabClicked(usize),
-    /// The current tab's content finished a step (no tab change needed).
-    ContentStep,
-    /// The Watching tab wants to navigate to the Search tab with a query.
-    NavigateToSearch(String),
-}
+const STORAGE_ITEM_FOR_TAB_PANEL_INDEX: &str = "last-index-of-app-tab-panel";
 
 impl<V: View> App<V> {
-    fn select_tab(&mut self, id: &TabId<V>) {
-        self.tab_panel.select(id);
-    }
-
     pub async fn step(&mut self) {
-        // We need to race "tab click" against "current pane step" without
-        // taking conflicting &self / &mut self borrows.  The trick: split the
-        // borrows so tab_list and panes are borrowed independently.
-
         let ev = self
             .tab_panel
             .step_with(|content| content.step().boxed_local())
             .await;
-
-        // let result = match self.active_tab {
-        //     TAB_SEARCH => {
-        //         let search = match self.panes.get_pane_at_mut(TAB_SEARCH).expect("search tab") {
-        //             TabContent::Search(s) => s,
-        //             _ => panic!("expected search tab"),
-        //         };
-        //         let tab_click = async {
-        //             let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
-        //             AppStepResult::TabClicked(index)
-        //         };
-        //         let content_step = async {
-        //             search.step().await;
-        //             AppStepResult::ContentStep
-        //         };
-        //         tab_click.or(content_step).await
-        //     }
-        //     TAB_DOWNLOADS => {
-        //         let downloads = match self
-        //             .panes
-        //             .get_pane_at_mut(TAB_DOWNLOADS)
-        //             .expect("downloads tab")
-        //         {
-        //             TabContent::Downloads(d) => d,
-        //             _ => panic!("expected downloads tab"),
-        //         };
-        //         let tab_click = async {
-        //             let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
-        //             AppStepResult::TabClicked(index)
-        //         };
-        //         let content_step = async {
-        //             downloads.step().await;
-        //             AppStepResult::ContentStep
-        //         };
-        //         tab_click.or(content_step).await
-        //     }
-        //     TAB_WATCHING => {
-        //         let watching = match self
-        //             .panes
-        //             .get_pane_at_mut(TAB_WATCHING)
-        //             .expect("watching tab")
-        //         {
-        //             TabContent::Watching(w) => w,
-        //             _ => panic!("expected watching tab"),
-        //         };
-        //         let tab_click = async {
-        //             let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
-        //             AppStepResult::TabClicked(index)
-        //         };
-        //         let content_step = async {
-        //             match watching.step().await {
-        //                 Some(query) => AppStepResult::NavigateToSearch(query),
-        //                 None => AppStepResult::ContentStep,
-        //             }
-        //         };
-        //         tab_click.or(content_step).await
-        //     }
-        //     TAB_SETTINGS => {
-        //         let settings = match self
-        //             .panes
-        //             .get_pane_at_mut(TAB_SETTINGS)
-        //             .expect("settings tab")
-        //         {
-        //             TabContent::Settings(s) => s,
-        //             _ => panic!("expected settings tab"),
-        //         };
-        //         if !self.settings_loaded {
-        //             settings.load().await;
-        //             self.settings_loaded = true;
-        //         }
-        //         let tab_click = async {
-        //             let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
-        //             AppStepResult::TabClicked(index)
-        //         };
-        //         let content_step = async {
-        //             settings.step().await;
-        //             AppStepResult::ContentStep
-        //         };
-        //         tab_click.or(content_step).await
-        //     }
-        //     _ => {
-        //         let TabListEvent::ItemClicked { index, .. } = self.tab_list.step().await;
-        //         AppStepResult::TabClicked(index)
-        //     }
-        // };
-
-        // match result {
-        //     AppStepResult::TabClicked(index) => {
-        //         self.select_tab(index);
-        //     }
-        //     AppStepResult::NavigateToSearch(query) => {
-        //         // Switch to the Search tab and queue the search query.
-        //         let search_tab = match self.panes.get_pane_at_mut(TAB_SEARCH).expect("search tab") {
-        //             TabContent::Search(s) => s,
-        //             _ => panic!("expected search tab"),
-        //         };
-        //         search_tab.set_pending_search(query);
-        //         self.select_tab(TAB_SEARCH);
-        //     }
-        //     AppStepResult::ContentStep => {}
-        // }
+        match ev {
+            TabPanelEvent::Tabs(TabListEvent::ItemClicked {
+                id: _,
+                index,
+                event: _,
+            }) => {
+                let _ = iti::storage::set_item(STORAGE_ITEM_FOR_TAB_PANEL_INDEX, &index);
+            }
+            TabPanelEvent::Panes(_) => {}
+        }
     }
 }

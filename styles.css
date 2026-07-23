@@ -32,3 +32,21 @@ html, body {
   height: 100%;
   overflow: auto;
 }
+
+.watching {
+  padding: 2px;
+}
+
+.watching-body {
+  padding: 1em;
+}
+
+.watching-footer {
+  padding: 1em;
+  background-color: var(--gray400);
+  text-align: center;
+}
+
+.table-platinum {
+  font-size: 1em;
+}

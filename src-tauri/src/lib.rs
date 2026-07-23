@@ -271,14 +271,14 @@ async fn search(state: State<'_, App>, query: &str) -> Result<Vec<Torrent>, AppE
 
 #[tauri::command]
 async fn info(state: State<'_, App>, id: &str) -> Result<TorrentInfo, AppError> {
-    log::info!("info: {id}");
-    let torrent = state
-        .client
-        .get_info(id)
-        .await
-        .map_err(|e| PirateError::Info {
+    log::info!("getting torrent info: {id}");
+    let torrent = state.client.get_info(id).await.map_err(|e| {
+        log::error!("couldn't get torrent info: {e}");
+        PirateError::Info {
             message: e.to_string(),
-        })?;
+        }
+    })?;
+    log::info!("got info for torrent: {}", torrent.name);
     Ok(pb_torrent_info_to_wire(torrent))
 }
 
@@ -733,9 +733,9 @@ pub fn run() {
 
             app.manage(app_state);
 
-            tauri::async_runtime::spawn(async move {
-                copy_task_from_disk(copy_config_path, copy_ledger_path, copy_notify).await;
-            });
+            // tauri::async_runtime::spawn(async move {
+            //     copy_task_from_disk(copy_config_path, copy_ledger_path, copy_notify).await;
+            // });
 
             Ok(())
         })

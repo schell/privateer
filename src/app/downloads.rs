@@ -351,37 +351,42 @@ impl<V: View> DownloadsView<V> {
     /// clicked, record the download and re-poll immediately.
     /// Returns after one tick so the caller can race with tab switches.
     pub async fn step(&mut self) {
-        // Poll first
-        self.poll().await;
+        loop {
+            // Poll first
+            self.poll().await;
 
-        // Now race the 3-second timer against assign button clicks
-        enum WaitResult {
-            Timeout,
-            Assign(AssignEvent),
-        }
+            // Now race the 3-second timer against assign button clicks
+            enum WaitResult {
+                Timeout,
+                Assign(AssignEvent),
+            }
 
-        let result = async {
-            mogwai::time::wait_millis(3000).await;
-            WaitResult::Timeout
-        }
-        .or(async { WaitResult::Assign(self.wait_for_assign().await) })
-        .await;
+            let result = async {
+                mogwai::time::wait_millis(3000).await;
+                WaitResult::Timeout
+            }
+            .or(async { WaitResult::Assign(self.wait_for_assign().await) })
+            .await;
 
-        match result {
-            WaitResult::Timeout => {}
-            WaitResult::Assign(event) => {
-                // Call add_download, then re-poll immediately
-                match super::add_download(&event.hash_string, &event.name, event.destination).await
-                {
-                    Ok(()) => {
-                        log::info!("Assigned '{}' to {}", event.name, event.destination.label());
-                    }
-                    Err(e) => {
-                        log::error!("Failed to assign download: {e}");
+            match result {
+                WaitResult::Timeout => {}
+                WaitResult::Assign(event) => {
+                    // Call add_download, then re-poll immediately
+                    match super::add_download(&event.hash_string, &event.name, event.destination)
+                        .await
+                    {
+                        Ok(()) => {
+                            log::info!(
+                                "Assigned '{}' to {}",
+                                event.name,
+                                event.destination.label()
+                            );
+                        }
+                        Err(e) => {
+                            log::error!("Failed to assign download: {e}");
+                        }
                     }
                 }
-                // Re-poll to update the UI immediately
-                self.poll().await;
             }
         }
     }
