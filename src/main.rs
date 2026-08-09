@@ -35,7 +35,7 @@ fn main() {
     body.append_child(&app);
     wasm_bindgen_futures::spawn_local(async move {
         loop {
-            app.step().await;
+            app.step_mut().await;
         }
     });
 }

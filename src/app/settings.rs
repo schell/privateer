@@ -9,6 +9,7 @@ use privateer_wire_types::{AppError, ErrorKind, TransmissionConfig};
 
 use super::invoke;
 
+#[allow(dead_code)]
 async fn get_transmission_config() -> Result<TransmissionConfig, AppError> {
     #[derive(serde::Serialize)]
     struct Empty {}
@@ -212,6 +213,7 @@ impl<V: View> SettingsView<V> {
         }
     }
 
+    #[allow(dead_code)]
     fn set_config_values(&self, config: &TransmissionConfig) {
         self.host_input.dyn_el(|input: &web_sys::HtmlInputElement| {
             input.set_value(&config.host);
@@ -238,6 +240,7 @@ impl<V: View> SettingsView<V> {
     }
 
     /// Load settings from backend on initial display.
+    #[allow(dead_code)]
     pub async fn load(&self) {
         match get_transmission_config().await {
             Ok(config) => {
@@ -248,8 +251,11 @@ impl<V: View> SettingsView<V> {
             }
         }
     }
+}
 
-    pub async fn step(&mut self) {
+impl<V: View> StepMut for SettingsView<V> {
+    type Output = ();
+    async fn step_mut(&mut self) {
         let action = self
             .on_click_save
             .next()

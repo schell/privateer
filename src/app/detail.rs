@@ -131,9 +131,11 @@ impl<V: View> AddButtonGroup<V> {
         self.selected = dest;
         self.label_text.set_text(format!("Add to {}", dest.label()));
     }
+}
 
-    /// Wait for an action on the split button.
-    async fn step(&mut self) -> MagnetAction {
+impl<V: View> StepMut for AddButtonGroup<V> {
+    type Output = MagnetAction;
+    async fn step_mut(&mut self) -> MagnetAction {
         loop {
             let ev = self
                 .on_click_primary
@@ -302,8 +304,11 @@ impl<V: View> TorrentDetail<V> {
         log::info!("Recording download '{name}'...");
         super::add_download(info_hash, name, destination).await
     }
+}
 
-    pub async fn step(&mut self) {
+impl<V: View> StepMut for TorrentDetail<V> {
+    type Output = ();
+    async fn step_mut(&mut self) {
         loop {
             if let Some(add_group) = self.add_button_group.as_mut() {
                 log::info!("step details with add button");
@@ -312,7 +317,7 @@ impl<V: View> TorrentDetail<V> {
                     .back_button
                     .step()
                     .map(|_| None)
-                    .or(add_group.step().map(Some))
+                    .or(add_group.step_mut().map(Some))
                     .await;
 
                 match clicked_back {

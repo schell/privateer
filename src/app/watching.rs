@@ -186,7 +186,7 @@ impl<V: View> WatchCard<V> {
         }
     }
 
-    fn set_movie_results(&mut self, count: usize, exists: bool) {
+    fn set_movie_results(&mut self, count: usize, _exists: bool) {
         if count == 0 {
             self.body_text.set_text("No results found");
         } else {
@@ -502,6 +502,7 @@ impl<V: View> WatchingView<V> {
     }
 
     /// Auto-remove movies that appear in the downloads ledger.
+    #[allow(dead_code)]
     async fn auto_remove_movies(&mut self) {
         let ledger = match super::get_downloads_ledger().await {
             Ok(l) => l,
@@ -527,15 +528,11 @@ impl<V: View> WatchingView<V> {
             self.reload().await;
         }
     }
+}
 
-    /// One step of the watching view event loop.
-    ///
-    /// Loads watchlist on first call, polls searches, then waits 60 s or until
-    /// the user interacts (add/remove/toggle).
-    ///
-    /// Returns `query` when the user clicks a search link, indicating
-    /// the caller should switch to the Search tab and run that query.
-    pub async fn step(&mut self) -> String {
+impl<V: View> StepMut for WatchingView<V> {
+    type Output = String;
+    async fn step_mut(&mut self) -> String {
         loop {
             // First load
             if !self.loaded {

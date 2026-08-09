@@ -65,17 +65,22 @@ impl<V: View> Default for SearchResults<V> {
     }
 }
 
-impl<V: View> SearchResults<V> {
-    /// Resolves to the first selected torrent.
-    pub(crate) async fn step(&mut self) -> Torrent {
+impl<V: View> StepMut for SearchResults<V> {
+    type Output = Torrent;
+    async fn step_mut(&mut self) -> Torrent {
         loop {
-            let ev = self.table.step_with(|row| row.step().boxed_local()).await;
+            let ev = self
+                .table
+                .step_with_mut(|row| row.step_mut().boxed_local())
+                .await;
             if let TableEvent::User(torrent) = ev {
                 return torrent;
             }
         }
     }
+}
 
+impl<V: View> SearchResults<V> {
     pub(crate) fn set_search_results(&mut self, torrents: impl IntoIterator<Item = Torrent>) {
         let rows = torrents.into_iter().map(TorrentRow::from);
         while !self.table.is_empty() {
@@ -136,28 +141,28 @@ impl<V: View> Default for SearchView<V> {
     }
 }
 
-pub(crate) enum Step<V: View> {
+pub(crate) enum SearchStep<V: View> {
     Results(Box<Torrent>),
     Submit(V::Event),
 }
 
-impl<V: View> SearchView<V> {
-    /// Resolves with a selected torrent.
-    pub async fn step(&mut self) -> Torrent {
+impl<V: View> StepMut for SearchView<V> {
+    type Output = Torrent;
+    async fn step_mut(&mut self) -> Torrent {
         loop {
-            let submission = self.on_submit_query.next().map(Step::Submit);
-            let search_button = self.search_button.step().map(Step::Submit);
+            let submission = self.on_submit_query.next().map(SearchStep::Submit);
+            let search_button = self.search_button.step().map(SearchStep::Submit);
             let sorting = self
                 .search_results
-                .step()
-                .map(|t| Step::Results(Box::new(t)));
-            let ev: Step<V> = submission.or(search_button).or(sorting).await;
+                .step_mut()
+                .map(|t| SearchStep::Results(Box::new(t)));
+            let ev: SearchStep<V> = submission.or(search_button).or(sorting).await;
             match ev {
-                Step::Results(t) => {
+                SearchStep::Results(t) => {
                     log::info!("showing results for {}", t.name);
                     return *t;
                 }
-                Step::Submit(ev) => {
+                SearchStep::Submit(ev) => {
                     ev.dyn_ev(|ev: &web_sys::Event| ev.prevent_default());
                     let search_query = self
                         .input
@@ -190,7 +195,9 @@ impl<V: View> SearchView<V> {
             }
         }
     }
+}
 
+impl<V: View> SearchView<V> {
     /// Programmatically run a search query.  Sets the input value, executes the
     /// search, and populates results — the same as if the user had typed the
     /// query and pressed Enter.
@@ -299,8 +306,11 @@ impl<V: View> TorrentRow<V> {
     fn create_cell_fn(row: &Self, index: usize) -> V::Element {
         row.cells[index].wrapper.clone()
     }
+}
 
-    async fn step(&mut self) -> Torrent {
+impl<V: View> StepMut for TorrentRow<V> {
+    type Output = Torrent;
+    async fn step_mut(&mut self) -> Torrent {
         let _ev = mogwai::future::race_all(
             self.cells
                 .iter()
@@ -432,6 +442,7 @@ impl<V: View> SearchTabContent<V> {
     /// Queue a search query to be executed on the next `step()`.  The search
     /// tab will switch to its search pane, populate the input, run the query,
     /// and display results.
+    #[allow(dead_code)]
     pub fn set_pending_search(&mut self, query: String) {
         self.pending_search = Some(query);
         self.is_in_search = true;
@@ -448,8 +459,11 @@ impl<V: View> SearchTabContent<V> {
             self.detail_view_mut().set_phase(TorrentDetailPhase::Init);
         }
     }
+}
 
-    pub async fn step(&mut self) {
+impl<V: View> StepMut for SearchTabContent<V> {
+    type Output = ();
+    async fn step_mut(&mut self) {
         loop {
             if self.is_startup {
                 log::info!("search view startup");
@@ -468,7 +482,7 @@ impl<V: View> SearchTabContent<V> {
                 log::info!("showing search view");
                 Self::store_state(None);
                 self.show_search();
-                let torrent = self.search_view_mut().step().await;
+                let torrent = self.search_view_mut().step_mut().await;
                 log::info!("getting info");
                 let id = torrent.id.clone();
                 self.detail_view_mut()
@@ -487,7 +501,7 @@ impl<V: View> SearchTabContent<V> {
                 }
             } else {
                 log::info!("in detail");
-                self.detail_view_mut().step().await;
+                self.detail_view_mut().step_mut().await;
                 self.is_in_search = true;
                 log::info!("leaving detail");
             }

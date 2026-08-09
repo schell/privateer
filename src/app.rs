@@ -125,6 +125,7 @@ pub async fn remove_from_watchlist(id: u64) -> Result<(), AppError> {
     invoke::cmd("remove_from_watchlist", &Args { id }).await
 }
 
+#[allow(dead_code)]
 pub async fn get_downloads_ledger() -> Result<Vec<DownloadEntry>, AppError> {
     #[derive(serde::Serialize)]
     struct Empty {}
@@ -200,24 +201,25 @@ impl<V: View> ViewChild<V> for TabContent<V> {
     }
 }
 
-impl<V: View> TabContent<V> {
-    async fn step(&mut self) {
+impl<V: View> StepMut for TabContent<V> {
+    type Output = ();
+    async fn step_mut(&mut self) {
         match self {
             TabContent::Default(_) => {
                 futures_lite::future::pending::<()>().await;
             }
             TabContent::Search(search_tab_content) => {
-                search_tab_content.step().await;
+                search_tab_content.step_mut().await;
             }
             TabContent::Downloads(downloads_view) => {
-                downloads_view.step().await;
+                downloads_view.step_mut().await;
             }
             TabContent::Watching(watching_view) => {
-                let watching_result = watching_view.step().await;
+                let watching_result = watching_view.step_mut().await;
                 log::info!("watching result: {watching_result:?}");
             }
             TabContent::Settings(settings_view) => {
-                settings_view.step().await;
+                settings_view.step_mut().await;
             }
         }
     }
@@ -321,11 +323,12 @@ impl<V: View> Default for App<V> {
 
 const STORAGE_ITEM_FOR_TAB_PANEL_INDEX: &str = "last-index-of-app-tab-panel";
 
-impl<V: View> App<V> {
-    pub async fn step(&mut self) {
+impl<V: View> StepMut for App<V> {
+    type Output = ();
+    async fn step_mut(&mut self) {
         let ev = self
             .tab_panel
-            .step_with(|content| content.step().boxed_local())
+            .step_with_mut(|content| content.step_mut().boxed_local())
             .await;
         match ev {
             TabPanelEvent::Tabs(TabListEvent::ItemClicked {

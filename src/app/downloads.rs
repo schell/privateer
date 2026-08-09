@@ -345,12 +345,11 @@ impl<V: View> DownloadsView<V> {
 
         mogwai::future::race_all(futures).await
     }
+}
 
-    /// Run one poll cycle, then wait for the next tick.
-    /// While waiting, also listen for assign button clicks. If a button is
-    /// clicked, record the download and re-poll immediately.
-    /// Returns after one tick so the caller can race with tab switches.
-    pub async fn step(&mut self) {
+impl<V: View> StepMut for DownloadsView<V> {
+    type Output = ();
+    async fn step_mut(&mut self) {
         loop {
             // Poll first
             self.poll().await;
